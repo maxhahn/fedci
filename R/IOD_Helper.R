@@ -119,7 +119,7 @@ setOfPossSep <- function(G, p, pdsep.max= Inf, m.max = Inf){
   labelsG <- colnames(G)
   possSepG <- lapply(seq_len(p), function(.) vector("list", p))
   #this outputs all PossSep(x,G) which are the nodes where a path exists from x
-  #that they are possible seperating
+  #that they are possible separating
   allPdsep <- lapply(1:p, qreach, amat = G)
   for(x in seq_len(p)) {
     cur_adj_x <- getAdjNodes(G,x)
@@ -128,7 +128,7 @@ setOfPossSep <- function(G, p, pdsep.max= Inf, m.max = Inf){
       if(y %in% allPdsep[[x]]){
 
         X <- labelsG[x]
-        Y <-labelsG[y]
+        Y <- labelsG[y]
 
         allPdsepLabels_x <- labelsG[allPdsep[[x]]]
         allPdsepLabels_y <- labelsG[allPdsep[[y]]]
@@ -571,8 +571,9 @@ applyRulesOnHt <- function(listAllHt){
   return(G_PAG)
 }
 
-validatePossPags <- function(G_PAG, G_PAG_List, sepsetList, suffStat, IP){
-
+#validatePossPags <- function(G_PAG, G_PAG_List, sepsetList, suffStat, IP){
+validatePossPags <- function(G_PAG, sepsetList, suffStat, IP){
+  violates_list <- c()
   for (J in G_PAG) {
 
     #(i)
@@ -633,12 +634,14 @@ validatePossPags <- function(G_PAG, G_PAG_List, sepsetList, suffStat, IP){
             }
           }
         }
-        if(!violates){
-          G_PAG_List[[length(G_PAG_List)+1]] <- J
-        }
+        # if(!violates){
+        #   G_PAG_List[[length(G_PAG_List)+1]] <- J
+        # }
       }
     }
+    violates_list <- c(violates_list, violates)
   }
-  return(G_PAG_List)
+  #return(G_PAG_List)
+  return(violates_list)
 }
 

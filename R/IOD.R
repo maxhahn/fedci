@@ -1,3 +1,4 @@
+#' @export IOD
 IOD <- function(suffStat, alpha) {
 
   initSkeletonOutput <- initialSkeleton(suffStat, alpha)
@@ -6,7 +7,10 @@ IOD <- function(suffStat, alpha) {
   sepsetList <- initSkeletonOutput[[3]]
   n_datasets <- length(suffStat$citestResultsList)
 
-  #Algorithm 3:
+  # lapply(initSkeletonOutput[[4]], renderAG)
+  # renderAG(G)
+
+  # Algorithm 3:
 
   p <- length(colnames(G))
 
@@ -16,11 +20,15 @@ IOD <- function(suffStat, alpha) {
 
   RemEdges <- getRemEdges(existingEdges,G, possSepList,n_datasets,suffStat)
 
+
   power_RemEdges <- powerSet(unique(RemEdges))
+  # one_edge_list <- which(lapply(power_RemEdges, length) == 1)
+
   index_possImmList <- 1
 
-  G_PAG_List <- list()
-  for (E in power_RemEdges) {
+  #G_PAG_List <- list()
+  #for (E in power_RemEdges) {
+  G_PAG_List <- foreach (E = power_RemEdges, .verbose=TRUE) %dofuture% {
     H <- induceSubgraph(G,E)
     labelsG <- colnames(G)
     PossImm <- getPossImm(H, n_datasets, suffStat, sepsetList, labelsG)
@@ -48,7 +56,13 @@ IOD <- function(suffStat, alpha) {
     # to update sepset accordingly.
     G_PAG <- unique(G_PAG)
 
-    G_PAG_List <- validatePossPags(G_PAG, G_PAG_List, sepsetList, suffStat, IP)
+    violation_List <- validatePossPags(G_PAG, sepsetList, suffStat, IP)
+    G_PAG <- G_PAG[!violation_List]
+
+    return(G_PAG)
   }
-  return(unique(G_PAG_List))
+
+  G_PAG_List <- unique(unlist(G_PAG_List, recursive=F))
+
+  return(G_PAG_List)
 }
