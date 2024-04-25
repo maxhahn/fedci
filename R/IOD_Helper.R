@@ -97,7 +97,7 @@ adjPairsOneOccurrence <- function(G){
   labelsG <- colnames(G)
   neighbours <- list()
   G_copy <- G
-  renderAG(G)
+  #renderAG(G)
   index <- 1
 
   for (j in 1:length(labelsG)) {
@@ -399,7 +399,7 @@ initialSkeleton <- function(suffStat, alpha){
     sepset <- fixSepsetList(sepset)
 
     amat.Gi <-  as(skel.fit@graph, "matrix")
-    renderAG(amat.Gi, add_index = TRUE)
+    #renderAG(amat.Gi, add_index = TRUE)
 
     G <- remEdgesFromG(sepset, G, cur_labels) # here the edges that are removed
     # before in Gi are removed from G

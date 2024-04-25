@@ -12,9 +12,13 @@ library(rIOD)
 
 # They are saved in data[[1]], data[[2]], data[[3]]
 adag_out <- getDAG("pdsep_g")
+truePAG <- getTruePAG(adag_out$dagg)
+trueAdjM <- truePAG@amat
+renderAG(trueAdjM)
+
 data <- list()
 for (i in 1:3) {
-  adat_out <- FCI.Utils::generateDataset(adag = adag_out$dagg, N=1000, type = "continuous")
+  adat_out <- FCI.Utils::generateDataset(adag = adag_out$dagg, N=100000, type = "continuous")
   cur_full_dat <- adat_out$dat
   data[[i]] <-  cur_full_dat[, sample(1:ncol(cur_full_dat), size = 3)] #generated datasets
 }
@@ -41,7 +45,11 @@ suffStat$citestResultsList <- citestResultsList
 
 # call IOD.
 alpha <- 0.05
-listOfPags <- IOD(suffStat, alpha)
+iod_out <- IOD(suffStat, alpha)
 
 # show the output.
-lapply(listOfPags,renderAG)
+iod_out$Gi_PAG_list # list of PAGs generated from each dataset
+lapply(iod_out$Gi_PAG_list, renderAG)
+
+iod_out$G_PAG_List # list of possible merged PAGs
+lapply(iod_out$G_PAG_List, renderAG)
