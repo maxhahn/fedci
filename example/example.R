@@ -8,6 +8,9 @@ library(doFuture)
 library(gtools)
 library(rIOD)
 
+n_cores <- 8
+plan("multicore", workers = n_cores, gc=TRUE)
+
 # create datasets for 3 servers separately
 
 # They are saved in data[[1]], data[[2]], data[[3]]
