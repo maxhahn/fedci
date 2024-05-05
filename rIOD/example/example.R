@@ -42,6 +42,11 @@ for (cur_dat in data) {
   index <- index + 1
 }
 
+
+print('%%%')
+print(citestResultsList[[1]])
+print(citestResultsList)
+
 # create the list of the suffstat
 suffStat <- list()
 suffStat$citestResultsList <- citestResultsList
