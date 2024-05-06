@@ -1,0 +1,17 @@
+<html>
+    <header>
+        <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
+    </header>
+    <body>
+    <h1>YEAH!</h1>
+        <form hx-encoding='multipart/form-data' hx-post='/upload-data'
+            _='on htmx:xhr:progress(loaded, total) set #progress.value to (loaded/total)*100'>
+            <label for="file">Choose your csv input data:\n</label>
+            <input type='file' name='file' accept=".csv">
+            <button>
+                Upload
+            </button>
+            <progress id='progress' value='0' max='100'></progress>
+        </form>
+    </body>
+</html>
