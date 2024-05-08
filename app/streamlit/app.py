@@ -2,24 +2,34 @@ import streamlit as st
 import extra_streamlit_components as stx
 from streamlit_extras.dataframe_explorer import dataframe_explorer
 import pandas as pd
+import uuid
 
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
 
 # streamlit run app.py --server.enableXsrfProtection false
 
+# create personal secret / personal uid
+if 'private_user_id' not in st.session_state:
+    st.session_state['private_user_id'] = uuid.uuid4()
+if 'stepper_state' not in st.session_state:
+    st.session_state['stepper_state'] = None
+    
 # set server_provided_user_id when doing initial check up with server
 if 'server_provided_user_id' not in st.session_state:
     st.session_state['server_provided_user_id'] = "User A"
 if 'current_room' not in st.session_state:
-    st.session_state['current_room'] = ""
+    st.session_state['current_room'] = "My Room"
+if 'current_room_is_locked' not in st.session_state:
+    st.session_state['current_room_is_locked'] = True
+if 'current_room_id' not in st.session_state:
+    st.session_state['current_room_id'] = None
 if 'current_room_owner' not in st.session_state:
     st.session_state['current_room_owner'] = "User A"
 if 'current_partners' not in st.session_state:
     st.session_state['current_partners'] = ['User A', 'User B']
 if 'current_partner_ids' not in st.session_state:
     st.session_state['current_partner_ids'] = ['User A', 'User B']
-partner_table_fields = ["№", 'user', 'action']
 
 if 'uploaded_data' not in st.session_state:
     st.session_state['uploaded_data'] = None
@@ -31,10 +41,41 @@ if 'result_labels' not in st.session_state:
 def show_room_sidebar():
     
     col_structure = (1,4,2)
+    partner_table_fields = ["№", 'user', 'action']
     
     # TODO: Refresh and Lock Buttons to stop other people from joining
     
+    client_is_room_owner = st.session_state['server_provided_user_id'] == st.session_state['current_room_owner']
+    
     with st.sidebar:
+        # room title
+        st.write(f"Room: {st.session_state['current_room']} ({'locked' if st.session_state['current_room_is_locked'] else 'open'})")
+        
+        # room lock and refresh
+        if client_is_room_owner:
+            _, col1, col2, _ = st.columns((1,1,1,1))
+        else:
+            _, col1, _ = st.columns((1,1,1))
+            
+        if col1.button(':arrows_counterclockwise:', help='Refresh the room'):
+            st.rerun()
+        else:
+            # if the button wasn't pressed, stepper can be moved. If it was pressed. Stay on the same stepper state
+            st.session_state['stepper_state'] = None
+        
+        if client_is_room_owner:
+            if st.session_state['current_room_is_locked']:
+                lock_button_text = ':lock:'
+                lock_button_help_text = 'Unlock the room'
+            else:
+                lock_button_text = ':unlock:'
+                lock_button_help_text = 'Lock the room'
+            if col2.button(lock_button_text, help=lock_button_help_text):
+                st.session_state['current_room_is_locked'] = not st.session_state['current_room_is_locked']
+                # TODO: Post to server
+                st.rerun()
+        
+        # room member list
         cols = st.columns(col_structure)
         for col, field_name in zip(cols, partner_table_fields):
             col.write(field_name)
@@ -52,14 +93,14 @@ def show_room_sidebar():
                 user_str += " (owner)"
 
             col2.write(user_str.format(user))
-            if st.session_state['server_provided_user_id'] == st.session_state['current_room_owner']:
+            if client_is_room_owner:
                 if user_id == st.session_state['server_provided_user_id']:
                     do_action = False
                 else: 
-                    do_action = col3.button(':x:', key=f"user-kick-button-{i}")
+                    do_action = col3.button(':x:', key=f"user-kick-button-{i}", help='Kick')
                 if do_action:
-                    del st.session_state['current_partners'][i-1]
-                    del st.session_state['current_partner_ids'][i-1]
+                    del st.session_state['current_partners'][i]
+                    del st.session_state['current_partner_ids'][i]
                     # TODO: post kick to server and just refresh partner ids from response
                     st.rerun()        
         
@@ -153,10 +194,15 @@ def step_view_results():
 def main():
     st.write('# Welcome to {Some App}')
     
+    step = stx.stepper_bar(steps=["Connect to Server", "Upload Data", "Process Data", "Transfer Data", "View Result"])
+    
     if st.session_state['current_room'] is not None:
         show_room_sidebar()
-
-    step = stx.stepper_bar(steps=["Connect to Server", "Upload Data", "Process Data", "Transfer Data", "View Result"])
+    
+    if st.session_state['stepper_state'] == None:
+        st.session_state['stepper_state'] = step
+    else:
+        step = st.session_state['stepper_state']
 
     if step == 0:
         step_connect_to_server()
@@ -170,5 +216,6 @@ def main():
         step_view_results()
     else:
         st.error('Please reload the page - Stepper out of range')
+
         
 main()
