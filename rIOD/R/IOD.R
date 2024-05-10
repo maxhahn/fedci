@@ -5,7 +5,7 @@ IOD <- function(suffStat, alpha) {
   G <- initSkeletonOutput[[1]]
   IP <- initSkeletonOutput[[2]]
   sepsetList <- initSkeletonOutput[[3]]
-  Gi_list <- initSkeletonOutput[[4]]
+  Gi_List <- initSkeletonOutput[[4]]
 
   n_datasets <- length(suffStat$citestResultsList)
 
@@ -66,5 +66,5 @@ IOD <- function(suffStat, alpha) {
 
   G_PAG_List <- unique(unlist(G_PAG_List, recursive=F))
 
-  return(list(G_PAG_List=G_PAG_List, Gi_PAG_list=Gi_list))
+  return(list(G_PAG_List=G_PAG_List, Gi_PAG_List=Gi_List))
 }
