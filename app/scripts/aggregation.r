@@ -34,21 +34,9 @@ aggregate_ci_results <- function(ci_data) {
 
     index <- 1
     iod_out$Gi_PAG_Label_List <- list()
-    for (gipag in iod_out$Gi_PAG_list) {
+    for (gipag in iod_out$Gi_PAG_List) {
       iod_out$Gi_PAG_Label_List[[index]] <- colnames(gipag) 
       index <- index + 1
     }
-
-    #print(iod_out)
-    
     iod_out
 }
-
-
-
-# # show the output.
-# iod_out$Gi_PAG_list # list of PAGs generated from each dataset
-# lapply(iod_out$Gi_PAG_list, renderAG)
-
-# iod_out$G_PAG_List # list of possible merged PAGs
-# lapply(iod_out$G_PAG_List, renderAG)

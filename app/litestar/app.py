@@ -1,12 +1,12 @@
 from dataclasses import dataclass
 
-from typing import Annotated, List, Dict, Set, Tuple, Optional
+from typing import Annotated, List, Dict, Set, Optional
 
 from litestar import Litestar, MediaType, Response, post, get
 from litestar.exceptions import HTTPException
 from litestar.params import Body
-import datetime
 
+import datetime
 import uuid
 
 from collections import OrderedDict
@@ -16,6 +16,12 @@ import pandas as pd
 import pickle
 import base64
 
+
+# ,------.          ,--.  ,--.  ,--.  ,--.               
+# |  .---',--,--, ,-'  '-.`--',-'  '-.`--' ,---.  ,---.  
+# |  `--, |      \'-.  .-',--.'-.  .-',--.| .-. :(  .-'  
+# |  `---.|  ||  |  |  |  |  |  |  |  |  |\   --..-'  `) 
+# `------'`--''--'  `--'  `--'  `--'  `--' `----'`----'  
 
 @dataclass
 class Connection:
@@ -39,6 +45,12 @@ class Room:
     result_labels: List[List[str]]
     user_results: Dict[str, List[List[int]]]
     user_labels: Dict[str, List[str]]
+    
+# ,------. ,--------. ,-----.         
+# |  .-.  \'--.  .--''  .-.  ' ,---.  
+# |  |  \  :  |  |   |  | |  |(  .-'  
+# |  '--'  /  |  |   '  '-'  '.-'  `) 
+# `-------'   `--'    `-----' `----'  
     
 @dataclass
 class UserDTO:
@@ -91,6 +103,13 @@ class RoomDetailsDTO:
         self.private_result = room.user_results[requesting_user] if room.user_results is not None and requesting_user in room.user_results else None
         self.private_labels = room.user_labels[requesting_user] if room.user_labels is not None and requesting_user in room.user_labels else None
         
+# ,------.                                      ,--.          
+# |  .--. ' ,---.  ,---. ,--.,--. ,---.  ,---.,-'  '-. ,---.  
+# |  '--'.'| .-. :| .-. ||  ||  || .-. :(  .-''-.  .-'(  .-'  
+# |  |\  \ \   --.' '-' |'  ''  '\   --..-'  `) |  |  .-'  `) 
+# `--' '--' `----' `-|  | `----'  `----'`----'  `--'  `----'  
+#                    `--' 
+
 @dataclass
 class CheckInRequest:
     username: str
@@ -112,11 +131,26 @@ class RoomCreationRequest(BasicRequest):
 class DataSubmissionRequest(BasicRequest):
     data: str
     data_labels: List[str]
+    
+
+# ,------.            ,--.               ,---.   ,--.                         ,--.                                
+# |  .-.  \  ,--,--.,-'  '-. ,--,--.    '   .-',-'  '-.,--.--.,--.,--. ,---.,-'  '-.,--.,--.,--.--. ,---.  ,---.  
+# |  |  \  :' ,-.  |'-.  .-'' ,-.  |    `.  `-.'-.  .-'|  .--'|  ||  || .--''-.  .-'|  ||  ||  .--'| .-. :(  .-'  
+# |  '--'  /\ '-'  |  |  |  \ '-'  |    .-'    | |  |  |  |   '  ''  '\ `--.  |  |  '  ''  '|  |   \   --..-'  `) 
+# `-------'  `--`--'  `--'   `--`--'    `-----'  `--'  `--'    `----'  `---'  `--'   `----' `--'    `----'`----' 
 
 rooms: Dict[str, Room] = {}
 connections: Dict[str, Connection] = {}
 user2room: Dict[str, Room] = {}
 user2connection: Dict[str, Connection] = {}
+last_cleanse_time = datetime.datetime.now()
+
+# ,--.  ,--.       ,--.                             
+# |  '--'  | ,---. |  | ,---.  ,---. ,--.--. ,---.  
+# |  .--.  || .-. :|  || .-. || .-. :|  .--'(  .-'  
+# |  |  |  |\   --.|  || '-' '\   --.|  |   .-'  `) 
+# `--'  `--' `----'`--'|  |-'  `----'`--'   `----'  
+#                      `--'                         
 
 def validate_user_request(id: str, username: str):
     if id not in connections:
@@ -128,17 +162,56 @@ def validate_user_request(id: str, username: str):
     connections[id].last_request_time = datetime.datetime.now()
     return True
     
+def cleanse_inactive_users(curr_time):
+    for id, conn in connections.items():
+        if (curr_time-conn.last_request_time).total_seconds() > 60*60*3:
+            username = conn.username
+            # if user is in room
+            if username in user2room:
+                # remove from room
+                user2room[username].users.remove(username)
+                # if room is empty -> remove room
+                if len(user2room[username].users) == 0:
+                    del rooms[user2room[username]]
+                del user2room[username]
+            # remove connection lookup and connection
+            del user2connection[username]
+            del conn[id]
+            
+# ,--.  ,--.               ,--.  ,--.  ,--.          ,-----.,--.                  ,--.     
+# |  '--'  | ,---.  ,--,--.|  |,-'  '-.|  ,---.     '  .--./|  ,---.  ,---.  ,---.|  |,-.  
+# |  .--.  || .-. :' ,-.  ||  |'-.  .-'|  .-.  |    |  |    |  .-.  || .-. :| .--'|     /  
+# |  |  |  |\   --.\ '-'  ||  |  |  |  |  | |  |    '  '--'\|  | |  |\   --.\ `--.|  \  \  
+# `--'  `--' `----' `--`--'`--'  `--'  `--' `--'     `-----'`--' `--' `----' `---'`--'`--' 
 
 @get("/health-check")
 async def health_check() -> Response:
+    global last_cleanse_time
+    curr_time = datetime.datetime.now()
+    if (curr_time - last_cleanse_time).total_seconds() > 60*20:
+        cleanse_inactive_users(curr_time)
+        last_cleanse_time = curr_time
+    
     return Response(
         media_type=MediaType.TEXT,
         content='Hello there!',
         status_code=200
     )
+    
+#                                                                                                         ,--.                                                 
+#  ,-----.,--.,--.                 ,--.       ,-----.,--.                  ,--.          ,--.            /  /,------.                                          
+# '  .--./|  |`--' ,---. ,--,--, ,-'  '-.    '  .--./|  ,---.  ,---.  ,---.|  |,-.,-----.|  |,--,--,    /  / |  .--. ' ,---. ,--,--,  ,--,--.,--,--,--. ,---.  
+# |  |    |  |,--.| .-. :|      \'-.  .-'    |  |    |  .-.  || .-. :| .--'|     /'-----'|  ||      \  /  /  |  '--'.'| .-. :|      \' ,-.  ||        || .-. : 
+# '  '--'\|  ||  |\   --.|  ||  |  |  |      '  '--'\|  | |  |\   --.\ `--.|  \  \       |  ||  ||  | /  /   |  |\  \ \   --.|  ||  |\ '-'  ||  |  |  |\   --. 
+#  `-----'`--'`--' `----'`--''--'  `--'       `-----'`--' `--' `----' `---'`--'`--'      `--'`--''--'/  /    `--' '--' `----'`--''--' `--`--'`--`--`--' `----' 
+#                                                                                                   `--'
 
 @post("/check-in")
 async def check_in(data: Annotated[CheckInRequest, Body(title='Check-In', description='Check in to server with a username of choice')]) -> Response:
+    
+    if data.username is None or len(data.username.replace(r'\s', '')) == 0:
+        raise HTTPException(detail='Username is not accepted', status_code=400)
+    
     # guarantee unused new id
     new_id = uuid.uuid4()
     while new_id in connections:
@@ -168,6 +241,9 @@ async def check_in(data: Annotated[CheckInRequest, Body(title='Check-In', descri
 async def change_name(data: Annotated[ChangeUsernameRequest, Body(title='Change Name', description='Change displayed username')]) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
+    
+    if data.username is None or len(data.username.replace(r'\s', '')) == 0:
+        raise HTTPException(detail='Username is not accepted', status_code=400)
         
     username_offset = 1
     occupied_usernames = [c.username for c in connections.values()]
@@ -184,6 +260,14 @@ async def change_name(data: Annotated[ChangeUsernameRequest, Body(title='Change 
         content=UserDTO(conn),
         status_code=200
         )
+    
+#                                                                          ,--.                                                                                     
+#  ,----.            ,--.      ,------.                                   /  /,------.                             ,------.           ,--.          ,--.,--.        
+# '  .-./    ,---. ,-'  '-.    |  .--. ' ,---.  ,---. ,--,--,--. ,---.   /  / |  .--. ' ,---.  ,---. ,--,--,--.    |  .-.  \  ,---. ,-'  '-. ,--,--.`--'|  | ,---.  
+# |  | .---.| .-. :'-.  .-'    |  '--'.'| .-. || .-. ||        |(  .-'  /  /  |  '--'.'| .-. || .-. ||        |    |  |  \  :| .-. :'-.  .-'' ,-.  |,--.|  |(  .-'  
+# '  '--'  |\   --.  |  |      |  |\  \ ' '-' '' '-' '|  |  |  |.-'  `)/  /   |  |\  \ ' '-' '' '-' '|  |  |  |    |  '--'  /\   --.  |  |  \ '-'  ||  ||  |.-'  `) 
+#  `------'  `----'  `--'      `--' '--' `---'  `---' `--`--`--'`----'/  /    `--' '--' `---'  `---' `--`--`--'    `-------'  `----'  `--'   `--`--'`--'`--'`----'  
+#                                                                    `--'  
 
 # list rooms
 @post("/rooms")
@@ -205,7 +289,55 @@ async def get_room(data: BasicRequest, room_name: str) -> Response:
         raise HTTPException(detail='The room does not exist', status_code=404)
     
     room = rooms[room_name]
+    
+    if data.username not in room.users:
+        raise HTTPException(detail='You are not in this room', status_code=403)
 
+    return Response(
+        media_type=MediaType.JSON,
+        content=RoomDetailsDTO(room, data.username),
+        status_code=200
+        )
+    
+# ,------.                             ,--.          ,--.                                ,--.  ,--.                
+# |  .--. ' ,---.  ,---. ,--,--,--.    |  |,--,--, ,-'  '-. ,---. ,--.--. ,--,--. ,---.,-'  '-.`--' ,---. ,--,--,  
+# |  '--'.'| .-. || .-. ||        |    |  ||      \'-.  .-'| .-. :|  .--'' ,-.  || .--''-.  .-',--.| .-. ||      \ 
+# |  |\  \ ' '-' '' '-' '|  |  |  |    |  ||  ||  |  |  |  \   --.|  |   \ '-'  |\ `--.  |  |  |  |' '-' '|  ||  | 
+# `--' '--' `---'  `---' `--`--`--'    `--'`--''--'  `--'   `----'`--'    `--`--' `---'  `--'  `--' `---' `--''--' 
+    
+# create room
+@post("/rooms/create")
+async def create_room(data: RoomCreationRequest) -> Response:
+    if not validate_user_request(data.id, data.username):
+        raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
+    
+    room_owner = data.username
+    room_name = data.room_name
+    
+    room_name_offset = 1
+    new_room_name = room_name
+    occupied_room_names = [r.name for r in rooms.values()]
+    while new_room_name in occupied_room_names:
+        new_room_name = room_name + f' ({room_name_offset})'
+        room_name_offset += 1
+    
+    room = Room(name=new_room_name,
+                owner_name=room_owner,
+                is_locked=True,
+                is_hidden=False,
+                is_processing=False,
+                is_finished=False,
+                users={room_owner},
+                user_provided_labels={room_owner: connections[data.id].data_labels},
+                result=None,
+                result_labels=None,
+                user_results={},
+                user_labels={}
+                )
+    
+    rooms[new_room_name] = room
+    user2room[room_owner] = room
+    
     return Response(
         media_type=MediaType.JSON,
         content=RoomDetailsDTO(room, data.username),
@@ -250,23 +382,28 @@ async def leave_room(data: BasicRequest, room_name: str) -> Response:
     
     room = rooms[room_name]
     
-    # TODO CHANGE OWNER IF OWNER LEAVES
-    
     if data.username not in room.users:
         raise HTTPException(detail='You are not in the room', status_code=403)
     
     room.users.remove(data.username)
+    del user2room[data.username]
+    # just remove room if it is empty
+    if len(room.users) == 0:
+        del rooms[room_name]
+        return Response(
+            media_type=MediaType.TEXT,
+            content="You left the room",
+            status_code=200
+            )
+    
     del room.user_provided_labels[data.username]
     if room.is_finished:
         del room.user_results[data.username]
+        
+    if data.username == room.owner_name:
+        room.owner_name = room.users[0]
+        
     rooms[room_name] = room # reassign
-    
-    del user2room[data.username]
-    
-    # remove room if it is empty
-    
-    if len(room.users) == 0:
-        del rooms[room_name]
     
     return Response(
         media_type=MediaType.TEXT,
@@ -274,7 +411,6 @@ async def leave_room(data: BasicRequest, room_name: str) -> Response:
         status_code=200
         )
     
-
 # kick user from room
 @post("/rooms/{room_name:str}/kick/{username_to_kick:str}")
 async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_kick: str) -> Response:
@@ -298,10 +434,11 @@ async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_ki
         raise HTTPException(detail='The person attempted to kick is not inside the room', status_code=403)
     
     room.users.remove(username_to_kick)
-    del room.user_provided_labels[data.username]
+    del room.user_provided_labels[username_to_kick]
     if room.is_finished:
-        del room.user_results[data.username]
+        del room.user_results[username_to_kick]
     del user2room[username_to_kick]
+    rooms[room_name] = room
     
     return Response(
         media_type=MediaType.JSON,
@@ -309,6 +446,12 @@ async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_ki
         status_code=200
         )
     
+#   ,-.,--. ,--.        ,-.  ,--.                ,--.        ,------.                          
+#  / .'|  | |  |,--,--, '. \ |  |    ,---.  ,---.|  |,-.     |  .--. ' ,---.  ,---. ,--,--,--. 
+# |  | |  | |  ||      \ |  ||  |   | .-. || .--'|     /     |  '--'.'| .-. || .-. ||        | 
+# |  | '  '-'  '|  ||  | |  ||  '--.' '-' '\ `--.|  \  \     |  |\  \ ' '-' '' '-' '|  |  |  | 
+#  \ '. `-----' `--''--'.' / `-----' `---'  `---'`--'`--'    `--' '--' `---'  `---' `--`--`--' 
+#   `-'                 `-'    
     
 def change_room_lock_state(data: BasicRequest, room_name: str, new_lock_state: bool):
     if not validate_user_request(data.id, data.username):
@@ -343,9 +486,13 @@ async def lock_room(data: BasicRequest, room_name: str) -> Response:
 async def unlock_room(data: BasicRequest, room_name: str) -> Response:
     return change_room_lock_state(data, room_name, False)
 
-###
-# HIDE ROOM
-###
+#                                  ,--.                                                                                
+# ,--.  ,--.,--.   ,--.           /  /,------.                               ,--.    ,------.                          
+# |  '--'  |`--' ,-|  | ,---.    /  / |  .--. ' ,---.,--.  ,--.,---.  ,--,--.|  |    |  .--. ' ,---.  ,---. ,--,--,--. 
+# |  .--.  |,--.' .-. || .-. :  /  /  |  '--'.'| .-. :\  `'  /| .-. :' ,-.  ||  |    |  '--'.'| .-. || .-. ||        | 
+# |  |  |  ||  |\ `-' |\   --. /  /   |  |\  \ \   --. \    / \   --.\ '-'  ||  |    |  |\  \ ' '-' '' '-' '|  |  |  | 
+# `--'  `--'`--' `---'  `----'/  /    `--' '--' `----'  `--'   `----' `--`--'`--'    `--' '--' `---'  `---' `--`--`--' 
+#                            `--' 
 
 def change_room_hidden_state(data: BasicRequest, room_name: str, new_hidden_state: bool):
     if not validate_user_request(data.id, data.username):
@@ -380,45 +527,13 @@ async def hide_room(data: BasicRequest, room_name: str) -> Response:
 @post("/rooms/{room_name:str}/reveal")
 async def reveal_room(data: BasicRequest, room_name: str) -> Response:
     return change_room_hidden_state(data, room_name, False)
-
-# create room
-@post("/rooms/create")
-async def create_room(data: RoomCreationRequest) -> Response:
-    if not validate_user_request(data.id, data.username):
-        raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     
-    room_owner = data.username
-    room_name = data.room_name
-    
-    room_name_offset = 1
-    new_room_name = room_name
-    occupied_room_names = [r.name for r in rooms.values()]
-    while new_room_name in occupied_room_names:
-        new_room_name = room_name + f' ({room_name_offset})'
-        room_name_offset += 1
-    
-    room = Room(name=new_room_name,
-                owner_name=room_owner,
-                is_locked=True,
-                is_hidden=False,
-                is_processing=False,
-                is_finished=False,
-                users={room_owner},
-                user_provided_labels={room_owner: connections[data.id].data_labels},
-                result=None,
-                result_labels=None,
-                user_results={},
-                user_labels={}
-                )
-    
-    rooms[new_room_name] = room
-    user2room[room_owner] = room
-    
-    return Response(
-        media_type=MediaType.JSON,
-        content=RoomDetailsDTO(room, data.username),
-        status_code=200
-        )
+#  ,-----.,--.,--.                 ,--.      ,------.            ,--.              ,--. ,--.       ,--.                  ,--. 
+# '  .--./|  |`--' ,---. ,--,--, ,-'  '-.    |  .-.  \  ,--,--.,-'  '-. ,--,--.    |  | |  | ,---. |  | ,---.  ,--,--. ,-|  | 
+# |  |    |  |,--.| .-. :|      \'-.  .-'    |  |  \  :' ,-.  |'-.  .-'' ,-.  |    |  | |  || .-. ||  || .-. |' ,-.  |' .-. | 
+# '  '--'\|  ||  |\   --.|  ||  |  |  |      |  '--'  /\ '-'  |  |  |  \ '-'  |    '  '-'  '| '-' '|  |' '-' '\ '-'  |\ `-' | 
+#  `-----'`--'`--' `----'`--''--'  `--'      `-------'  `--`--'  `--'   `--`--'     `-----' |  |-' `--' `---'  `--`--' `---'  
+#                                                                                           `--' 
     
 # post data to room
 @post("/submit-data")
@@ -436,6 +551,12 @@ async def receive_data(data: DataSubmissionRequest) -> Response:
         content='Data received',
         status_code=200
         )
+    
+# ,------.                     ,--. ,-----. ,------.   
+# |  .--. ',--.,--.,--,--,     |  |'  .-.  '|  .-.  \  
+# |  '--'.'|  ||  ||      \    |  ||  | |  ||  |  \  : 
+# |  |\  \ '  ''  '|  ||  |    |  |'  '-'  '|  '--'  / 
+# `--' '--' `----' `--''--'    `--' `-----' `-------' 
     
 def run_riod(data):
     users = []
@@ -455,9 +576,10 @@ def run_riod(data):
             users.append(user)
         result = aggregate_ci_results_f(lvs)
 
+        print(result.keys())
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
         g_pag_labels = [list(x[1]) for x in result['G_PAG_Label_List'].items()]
-        gi_pag_list = [x[1].tolist() for x in result['Gi_PAG_list'].items()]
+        gi_pag_list = [x[1].tolist() for x in result['Gi_PAG_List'].items()]
         gi_pag_labels = [list(x[1]) for x in result['Gi_PAG_Label_List'].items()]
         return g_pag_list, g_pag_labels,  {u:r for u,r in zip(users, gi_pag_list)}, {u:l for u,l in zip(users, gi_pag_labels)}
     
@@ -487,7 +609,6 @@ async def run_iod(data: BasicRequest, room_name: str) -> Response:
         participant_data.append(conn.data)
         participant_data_labels.append(conn.data_labels)
         
-    # TODO: error handling - fix room state
     try:
         result, result_labels, user_result, user_labels = run_riod(zip(participants, participant_data, participant_data_labels))
     except:
@@ -517,6 +638,12 @@ async def run_iod(data: BasicRequest, room_name: str) -> Response:
         status_code=200
         )
 
+# ,------.                  ,--.                     ,---.           ,--.                  
+# |  .--. ' ,---. ,--.,--.,-'  '-. ,---. ,--.--.    '   .-'  ,---. ,-'  '-.,--.,--. ,---.  
+# |  '--'.'| .-. ||  ||  |'-.  .-'| .-. :|  .--'    `.  `-. | .-. :'-.  .-'|  ||  || .-. | 
+# |  |\  \ ' '-' ''  ''  '  |  |  \   --.|  |       .-'    |\   --.  |  |  '  ''  '| '-' ' 
+# `--' '--' `---'  `----'   `--'   `----'`--'       `-----'  `----'  `--'   `----' |  |-'  
+#                                                                                  `--' 
 
 app = Litestar([
     health_check,

@@ -1,28 +1,38 @@
 import streamlit as st
 import extra_streamlit_components as stx
 from streamlit_extras.dataframe_explorer import dataframe_explorer
+from streamlit_autorefresh import st_autorefresh
+
 import pandas as pd
 import requests
+import graphviz
+import datetime
+
 import pickle
 import base64
-import graphviz
 
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
 
-server_url = 'http://127.0.0.1:8000'
 
+# launch command
 # streamlit run app.py --server.enableXsrfProtection false
 
-# create personal secret / personal uid
+#  ,---.   ,--.            ,--.             ,--.        ,--.  ,--.   
+# '   .-',-'  '-. ,--,--.,-'  '-. ,---.     |  |,--,--, `--',-'  '-. 
+# `.  `-.'-.  .-'' ,-.  |'-.  .-'| .-. :    |  ||      \,--.'-.  .-' 
+# .-'    | |  |  \ '-'  |  |  |  \   --.    |  ||  ||  ||  |  |  |   
+# `-----'  `--'   `--`--'  `--'   `----'    `--'`--''--'`--'  `--' 
+
 if 'username' not in st.session_state:
     st.session_state['username'] = None
-if 'stepper_state' not in st.session_state:
-    st.session_state['stepper_state'] = None
 if 'server_url' not in st.session_state:
-    st.session_state['server_url'] = 'http://127.0.0.1:8000'
+    st.session_state['server_url'] = 'http://127.0.0.1:8000' # TODO: load default url from config file
+if 'last_health_check' not in st.session_state:
+    st.session_state['last_health_check'] = None
+if 'is_connected_to_server' not in st.session_state:
+    st.session_state['is_connected_to_server'] = None
     
-# set server_provided_user_id when doing initial check up with server
 if 'server_provided_user_id' not in st.session_state:
     st.session_state['server_provided_user_id'] = None
 if 'current_room' not in st.session_state:
@@ -37,104 +47,87 @@ if 'result_labels' not in st.session_state:
 if 'server_has_received_data' not in st.session_state:
     st.session_state['server_has_received_data'] = False  
     
+# ,--.  ,--.,--------.,--------.,------.     ,------.                ,--.      ,--.  ,--.       ,--.                      
+# |  '--'  |'--.  .--''--.  .--'|  .--. '    |  .--. ' ,---.  ,---.,-'  '-.    |  '--'  | ,---. |  | ,---.  ,---. ,--.--. 
+# |  .--.  |   |  |      |  |   |  '--' |    |  '--' || .-. |(  .-''-.  .-'    |  .--.  || .-. :|  || .-. || .-. :|  .--' 
+# |  |  |  |   |  |      |  |   |  | --'     |  | --' ' '-' '.-'  `) |  |      |  |  |  |\   --.|  || '-' '\   --.|  |    
+# `--'  `--'   `--'      `--'   `--'         `--'      `---' `----'  `--'      `--'  `--' `----'`--'|  |-'  `----'`--'    
+#                                                                                                   `--'  
+    
+def post_to_server(url, payload):
+    try:
+        r = requests.post(url=url, json=payload)
+        return r
+    except:
+        st.session_state['last_health_check'] = None
+        st.error('There are problems with the server connection')
+    return None
+        
+
+#  ,---.                                           ,--.  ,--.               ,--.  ,--.  ,--.             ,-----.,--.                  ,--.     
+# '   .-'  ,---. ,--.--.,--.  ,--.,---. ,--.--.    |  '--'  | ,---.  ,--,--.|  |,-'  '-.|  ,---. ,-----.'  .--./|  ,---.  ,---.  ,---.|  |,-.  
+# `.  `-. | .-. :|  .--' \  `'  /| .-. :|  .--'    |  .--.  || .-. :' ,-.  ||  |'-.  .-'|  .-.  |'-----'|  |    |  .-.  || .-. :| .--'|     /  
+# .-'    |\   --.|  |     \    / \   --.|  |       |  |  |  |\   --.\ '-'  ||  |  |  |  |  | |  |       '  '--'\|  | |  |\   --.\ `--.|  \  \  
+# `-----'  `----'`--'      `--'   `----'`--'       `--'  `--' `----' `--`--'`--'  `--'  `--' `--'        `-----'`--' `--' `----' `---'`--'`--'
     
 def check_server_connection():
-    with st.spinner('Checking connection to server...'):
-        r = requests.get(url = f'{server_url}/health-check')
-    status_code = r.status_code
-    
-    if status_code != 200:
+    curr_time = datetime.datetime.now()
+    if st.session_state['last_health_check'] is not None and (curr_time - st.session_state['last_health_check']).total_seconds() < 60*5:
+        return True
+    try:
+        with st.spinner('Checking connection to server...'):
+            r = requests.get(url = f'{st.session_state["server_url"]}/health-check')
+            
+        if r.status_code != 200:
+            st.error('There are problems with the server connection')
+            st.session_state['is_connected_to_server'] = False
+            return False
+    except:
         st.error('There are problems with the server connection')
-        print('SERVER CONNECTION ISSUES')
-        print(r)
-        return
+        st.session_state['is_connected_to_server'] = False
+        return False
     
-    st.info('Server connection established' + ('' if st.session_state['username'] is None else f" - checked in as: {st.session_state['username']}"))
-    return
-    
-def show_room_sidebar():
-    
-    col_structure = (1,4,2)
-    partner_table_fields = ["№", 'user', 'action']
-    
-    # TODO: Refresh and Lock Buttons to stop other people from joining
-    
-    client_is_room_owner = st.session_state['server_provided_user_id'] == st.session_state['current_room_owner']
-    
-    with st.sidebar:
-        # room title
-        st.write(f"Room: {st.session_state['current_room']} ({'locked' if st.session_state['current_room_is_locked'] else 'open'})")
-        
-        # room lock and refresh
-        if client_is_room_owner:
-            _, col1, col2, _ = st.columns((1,1,1,1))
-        else:
-            _, col1, _ = st.columns((1,1,1))
-            
-        if col1.button(':arrows_counterclockwise:', help='Refresh the room'):
-            st.rerun()
-        else:
-            # if the button wasn't pressed, stepper can be moved. If it was pressed. Stay on the same stepper state
-            st.session_state['stepper_state'] = None
-        st.write(f"Room: {st.session_state['current_room']} ({'locked' if st.session_state['current_room_is_locked'] else 'open'})")
-        
-        if client_is_room_owner:
-            if st.session_state['current_room_is_locked']:
-                lock_button_text = ':lock:'
-                lock_button_help_text = 'Unlock the room'
-            else:
-                lock_button_text = ':unlock:'
-                lock_button_help_text = 'Lock the room'
-            if col2.button(lock_button_text, help=lock_button_help_text):
-                st.session_state['current_room_is_locked'] = not st.session_state['current_room_is_locked']
-                # TODO: Post to server
-                st.rerun()
-        
-        # room member list
-        cols = st.columns(col_structure)
-        for col, field_name in zip(cols, partner_table_fields):
-            col.write(field_name)
-            
-        users = st.session_state['current_partners']
-            
-        for i, user in enumerate(users):
-            col1, col2, col3 = st.columns(col_structure)
-            col1.write(i)
-            user_str = "{}"
-            if user == st.session_state['server_provided_user_id']:
-                user_str += " (you)"
-            if user == st.session_state['current_room_owner']:
-                user_str += " (owner)"
+    st.session_state['last_health_check'] = curr_time
+    st.session_state['is_connected_to_server'] = True
+    return True
 
-            col2.write(user_str.format(user))
-            if client_is_room_owner:
-                if user == st.session_state['username']:
-                    do_action = False
-                else: 
-                    do_action = col3.button(':x:', key=f"user-kick-button-{i}", help='Kick')
-                if do_action:
-                    del st.session_state['current_partners'][i]
-                    # TODO: post kick to server and just refresh partner ids from response
-                    st.rerun()        
-        
-    return    
+#  ,---.                                            ,-----.,--.                  ,--.          ,--.         
+# '   .-'  ,---. ,--.--.,--.  ,--.,---. ,--.--.    '  .--./|  ,---.  ,---.  ,---.|  |,-.,-----.|  |,--,--,  
+# `.  `-. | .-. :|  .--' \  `'  /| .-. :|  .--'    |  |    |  .-.  || .-. :| .--'|     /'-----'|  ||      \ 
+# .-'    |\   --.|  |     \    / \   --.|  |       '  '--'\|  | |  |\   --.\ `--.|  \  \       |  ||  ||  | 
+# `-----'  `----'`--'      `--'   `----'`--'        `-----'`--' `--' `----' `---'`--'`--'      `--'`--''--' 
 
 def step_check_in_to_server():
     if st.session_state['server_provided_user_id'] is not None:
         st.info('Server check-in completed')
         
-    st.write('Please enter a username:')
+    st.write('Please enter the server URL:')
+    col1, col2 = st.columns((6,1))
+    server_url = col1.text_input('Please chose your username', placeholder=st.session_state['server_url'], label_visibility='collapsed')
+    
+    if col2.button(':link:', help='Connect to URL') and server_url is not None and server_url != '':
+        if st.session_state['username'] is not None:
+            st.warning('''You are already checked in with a server.  
+                       In order to leave the server, refresh this page.''')
+        else:
+            if server_url.endswith('/'):
+                server_url = server_url[:-1]
+            st.session_state['server_url'] = server_url
+            st.session_state['last_health_check'] = None
+            st.rerun()
+            return
         
+    st.write('Please enter a username:')
     col1, col2 = st.columns((6,1))
     username = col1.text_input('Please chose your username', placeholder=st.session_state['username'], label_visibility='collapsed')
     
     if st.session_state['server_provided_user_id'] is None:
         button = col2.button(':arrow_heading_up:', help='Submit check-in request')
-        request_url = f'{server_url}/check-in'
+        request_url = f'{st.session_state["server_url"]}/check-in'
         request_params = {'username': username}
     else:
         button = col2.button(':arrow_heading_up:', help='Change name', disabled=not username)
-        request_url = f'{server_url}/change-name'
+        request_url = f'{st.session_state["server_url"]}/change-name'
         request_params = {
             'id': st.session_state['server_provided_user_id'],
             'username': st.session_state['username'],
@@ -142,10 +135,11 @@ def step_check_in_to_server():
             }
 
     if button:
-        r = requests.post(url=request_url, json=request_params)
+        r = post_to_server(request_url, request_params)
+        if r is None:
+            return
         if r.status_code != 200:
             st.error('Failed to check in with the server. Please reload the page')
-            print(r)
             return
 
         r = r.json()
@@ -153,6 +147,13 @@ def step_check_in_to_server():
         st.session_state['username'] = r['username']
         st.rerun()
     return
+
+# ,------.            ,--.              ,--. ,--.       ,--.                  ,--. 
+# |  .-.  \  ,--,--.,-'  '-. ,--,--.    |  | |  | ,---. |  | ,---.  ,--,--. ,-|  | 
+# |  |  \  :' ,-.  |'-.  .-'' ,-.  |    |  | |  || .-. ||  || .-. |' ,-.  |' .-. | 
+# |  '--'  /\ '-'  |  |  |  \ '-'  |    '  '-'  '| '-' '|  |' '-' '\ '-'  |\ `-' | 
+# `-------'  `--`--'  `--'   `--`--'     `-----' |  |-' `--' `---'  `--`--' `---'  
+#                                                `--'    
 
 def step_upload_data():
     uploaded_file = st.file_uploader('Data Upload', type='csv')
@@ -168,6 +169,13 @@ def step_upload_data():
         with st.expander('View Data'):
             df = st.session_state['uploaded_data']
             st.dataframe(dataframe_explorer(df), use_container_width=True)
+            
+# ,------.            ,--.              ,------.                                          ,--.                
+# |  .-.  \  ,--,--.,-'  '-. ,--,--.    |  .--. ',--.--. ,---.  ,---. ,---.  ,---.  ,---. `--',--,--,  ,---.  
+# |  |  \  :' ,-.  |'-.  .-'' ,-.  |    |  '--' ||  .--'| .-. || .--'| .-. :(  .-' (  .-' ,--.|      \| .-. | 
+# |  '--'  /\ '-'  |  |  |  \ '-'  |    |  | --' |  |   ' '-' '\ `--.\   --..-'  `).-'  `)|  ||  ||  |' '-' ' 
+# `-------'  `--`--'  `--'   `--`--'    `--'     `--'    `---'  `---' `----'`----' `----' `--'`--''--'.`-  /  
+#                                                                                                     `---'  
 
 def step_process_data():
     _, col1, col2, _ = st.columns((1,1,1,1))
@@ -200,18 +208,17 @@ def step_process_data():
         st.session_state['result_labels'] = labels
         st.rerun()
         
-
-        
     if col2.button('Submit Data!', help='Submit Data to Server', disabled=st.session_state['result_pvals'] is None):
         df_pvals = st.session_state['result_pvals']
         labels = st.session_state['result_labels']
         base64_df = base64.b64encode(pickle.dumps(df_pvals)).decode('utf-8')
         # send data and labels
-        r = requests.post(url = f'{server_url}/submit-data', json={'id': st.session_state['server_provided_user_id'],
+        r = post_to_server(url = f'{st.session_state["server_url"]}/submit-data', payload={'id': st.session_state['server_provided_user_id'],
                                                                     'username': st.session_state['username'],
                                                                     'data': base64_df,
                                                                     'data_labels': labels})
-        
+        if r is None:
+            return
         if r.status_code != 200:
             st.error('An error occured when submitting the data')
             return
@@ -237,6 +244,13 @@ def step_process_data():
         
     return
 
+# ,------.                             ,--.          ,--.   ,--.            
+# |  .--. ' ,---.  ,---. ,--,--,--.    |  |    ,---. |  |-. |  |-.,--. ,--. 
+# |  '--'.'| .-. || .-. ||        |    |  |   | .-. || .-. '| .-. '\  '  /  
+# |  |\  \ ' '-' '' '-' '|  |  |  |    |  '--.' '-' '| `-' || `-' | \   '   
+# `--' '--' `---'  `---' `--`--`--'    `-----' `---'  `---'  `---'.-'  /    
+#                                                                 `---'   
+
 def step_join_rooms():
     # enter new room name and join or create it
     info_placeholder = st.empty()
@@ -245,35 +259,37 @@ def step_join_rooms():
     # TODO: refresh button
     room_name = col1.text_input('Please chose a room name', label_visibility='collapsed')
     if col2.button(':arrow_right:', help='Join room', disabled=room_name is None):
-        r = requests.post(url = f'{server_url}/rooms/{room_name}/join', json={'id': st.session_state['server_provided_user_id'],
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room_name}/join', payload={'id': st.session_state['server_provided_user_id'],
                                                                 'username': st.session_state['username']})
+        if r is None:
+            return
         if r.status_code == 200:
             st.session_state['current_room'] = r.json()
             st.rerun()
             return 
-            
         st.error('An error occured trying to join the room')
     
     if col3.button(':tada:', help='Create room', disabled=room_name is None):
-        r = requests.post(url = f'{server_url}/rooms/create', json={'id': st.session_state['server_provided_user_id'],
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/create', payload={'id': st.session_state['server_provided_user_id'],
                                                                 'username': st.session_state['username'],
                                                                 'room_name': room_name})
-        if r.status_code != 200:
-            st.error('An error occured trying to create the room')
+        if r is None:
             return
+        if r.status_code == 200:
+            st.session_state['current_room'] = r.json()
+            st.rerun()
+            return
+        st.error('An error occured trying to create the room')
         
-        st.session_state['current_room'] = r.json()
-        st.rerun()
-        return
-    
     if col4.button(':arrows_counterclockwise:', help='Refresh the room'):
         st.rerun()
         return
-        
-    
+
     # Get room list
-    r = requests.post(url = f'{server_url}/rooms', json={'id': st.session_state['server_provided_user_id'],
+    r = post_to_server(url = f'{st.session_state["server_url"]}/rooms', payload={'id': st.session_state['server_provided_user_id'],
                                                                 'username': st.session_state['username']})
+    if r is None:
+        return
     if r.status_code != 200:
         st.error('An error occured trying to fetch room data')
         return
@@ -294,21 +310,30 @@ def step_join_rooms():
         col1.write(room['name'])
         col2.write(room['owner_name'])
         if col3.button(':arrow_right:', help='Room is locked' if room['is_locked'] else 'Join', disabled=room['is_locked'], key=f'join-button-{i}'):
-            r = requests.post(url = f'{server_url}/rooms/{room["name"]}/join', json={'id': st.session_state['server_provided_user_id'],
+            r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/join', payload={'id': st.session_state['server_provided_user_id'],
                                                                 'username': st.session_state['username']})
+            if r is None:
+                return
             if r.status_code == 200:
                 st.session_state['current_room'] = r.json()
                 st.rerun()
                 return
             
             st.error('An error occured trying to join the room')
-            
-    # TODO: create room list
     return
+
+# ,------.                             ,------.           ,--.          ,--.,--.        
+# |  .--. ' ,---.  ,---. ,--,--,--.    |  .-.  \  ,---. ,-'  '-. ,--,--.`--'|  | ,---.  
+# |  '--'.'| .-. || .-. ||        |    |  |  \  :| .-. :'-.  .-'' ,-.  |,--.|  |(  .-'  
+# |  |\  \ ' '-' '' '-' '|  |  |  |    |  '--'  /\   --.  |  |  \ '-'  ||  ||  |.-'  `) 
+# `--' '--' `---'  `---' `--`--`--'    `-------'  `----'  `--'   `--`--'`--'`--'`----' 
 
 def step_show_room_details():
     room = st.session_state['current_room']
-    st.write(f"## Room: {st.session_state['current_room']['name']} ({'hidden' if room['is_hidden'] else 'public'}) ({'locked' if room['is_locked'] else 'open'})")
+    if room['is_finished']:
+        st.write(f"## Room: {st.session_state['current_room']['name']} (finished)")
+    else:
+        st.write(f"## Room: {st.session_state['current_room']['name']} ({'hidden' if room['is_hidden'] else 'public'}) ({'locked' if room['is_locked'] else 'open'})")
     
     _, col1, col2, col3, col4, col5, _ = st.columns((1,1,1,1,1,1,1))
         
@@ -325,8 +350,10 @@ def step_show_room_details():
     
     if col2.button(lock_button_text, help=lock_button_help_text, disabled=st.session_state['username']!=room['owner_name']):
         lock_endpoint = 'unlock' if room['is_locked'] else 'lock'
-        r = requests.post(url = f'{server_url}/rooms/{room["name"]}/{lock_endpoint}', json={'id': st.session_state['server_provided_user_id'],
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/{lock_endpoint}', payload={'id': st.session_state['server_provided_user_id'],
                                                                                              'username': st.session_state['username']})
+        if r is None:
+            return
         if r.status_code == 200:
             st.session_state['current_room'] = r.json()
             st.rerun()
@@ -342,8 +369,10 @@ def step_show_room_details():
         
     if col3.button(hide_button_text, help=hide_button_help_text, disabled=st.session_state['username']!=room['owner_name']):
         hide_endpoint = 'reveal' if room['is_hidden'] else 'hide'
-        r = requests.post(url = f'{server_url}/rooms/{room["name"]}/{hide_endpoint}', json={'id': st.session_state['server_provided_user_id'],
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/{hide_endpoint}', payload={'id': st.session_state['server_provided_user_id'],
                                                                                              'username': st.session_state['username']})
+        if r is None:
+            return
         if r.status_code == 200:
             st.session_state['current_room'] = r.json()
             st.rerun()
@@ -351,30 +380,23 @@ def step_show_room_details():
         st.error(f'An error occured while trying to {hide_endpoint} the room')
         
     if col4.button(':arrow_left:', help='Leave the room'):
-        r = requests.post(url = f'{server_url}/rooms/{room["name"]}/leave', json={'id': st.session_state['server_provided_user_id'],
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/leave', payload={'id': st.session_state['server_provided_user_id'],
                                                                                  'username': st.session_state['username']})
-        
+        if r is None:
+            return
         if r.status_code == 200:
             st.session_state['current_room'] = None
-            st.session_state['room_result'] = None
-            st.session_state['room_result_labels'] = None
-            st.session_state['private_result'] = None
-            st.session_state['private_result_labels'] = None
             st.rerun()
             return
         st.error(f'An error occured while trying to leave the room')
         
-        
     if col5.button(':fire:', help='Run IOD on participant data', disabled=st.session_state['username']!=room['owner_name']):
-        r = requests.post(url = f'{server_url}/rooms/{room["name"]}/run', json={'id': st.session_state['server_provided_user_id'],
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/run', payload={'id': st.session_state['server_provided_user_id'],
                                                                                  'username': st.session_state['username']})
-        
+        if r is None:
+            return
         if r.status_code == 200:
-            r = r.json()
-            st.session_state['room_result'] = r['result']
-            st.session_state['room_result_labels'] = r['result_labels']
-            st.session_state['private_result'] = r['private_result']
-            st.session_state['private_result_labels'] = r['private_labels']
+            st.session_state['current_room'] = r.json()
             st.rerun()
             return
         st.error(f'An error occured while trying to run IOD')
@@ -385,8 +407,6 @@ def step_show_room_details():
     for col, field_name in zip(cols, room_fields):
         col.write(field_name)
 
-    
-        
     for i, user in enumerate(room['users']):
         col1, col2, col3, col4 = st.columns(col_structure)
         col1.write(i)
@@ -399,22 +419,33 @@ def step_show_room_details():
         col2.write(user_str)
         
         with col3.expander('Show'):
+            print(room)
             for label in sorted(room['user_provided_labels'][user]):
                 st.markdown(f'- {label}')
         
         if user != st.session_state['username']:
-            if col4.button(':x:', help='Kick', disabled=st.session_state['username'] != room['owner_name']):
-                # TODO: send kick
-                st.rerun()
-    
-    
+            if col4.button(':x:', help='Kick', disabled=st.session_state['username'] != room['owner_name'], key=f'kick-button-{i}'):
+                r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/kick/{user}', payload={'id': st.session_state['server_provided_user_id'],
+                                                                                                                'username': st.session_state['username']})
+                if r is None:
+                    return
+                if r.status_code == 200:
+                    st.session_state['current_room'] = r.json()
+                    st.rerun()
+                    return
+                st.error(f'Failed to kick user')
     return
 
+# ,------.                       ,--.  ,--.      ,--.   ,--.,--.                       ,--.,--.                 ,--.  ,--.                
+# |  .--. ' ,---.  ,---. ,--.,--.|  |,-'  '-.     \  `.'  / `--' ,---. ,--.,--. ,--,--.|  |`--',-----. ,--,--.,-'  '-.`--' ,---. ,--,--,  
+# |  '--'.'| .-. :(  .-' |  ||  ||  |'-.  .-'      \     /  ,--.(  .-' |  ||  |' ,-.  ||  |,--.`-.  / ' ,-.  |'-.  .-',--.| .-. ||      \ 
+# |  |\  \ \   --..-'  `)'  ''  '|  |  |  |         \   /   |  |.-'  `)'  ''  '\ '-'  ||  ||  | /  `-.\ '-'  |  |  |  |  |' '-' '|  ||  | 
+# `--' '--' `----'`----'  `----' `--'  `--'          `-'    `--'`----'  `----'  `--`--'`--'`--'`-----' `--`--'  `--'  `--' `---' `--''--' 
 
 arrow_type_lookup = {
         1: 'odot',
-        2: 'none',
-        3: 'normal'
+        2: 'normal',
+        3: 'none'
     }
 def data2graph(data, labels):
     graph = graphviz.Digraph()
@@ -432,10 +463,11 @@ def data2graph(data, labels):
     return graph
 
 def step_view_results():
-    result_graphs = [data2graph(d,l) for d,l in zip(st.session_state['room_result'], st.session_state['room_result_labels'])]
-    private_result_graph = data2graph(st.session_state['private_result'], st.session_state['private_result_labels'])
+    room = st.session_state['current_room']
+    result_graphs = [data2graph(d,l) for d,l in zip(room['result'], room['result_labels'])]
+    private_result_graph = data2graph(room['private_result'], room['private_labels'])
     
-    t1, t2 = st.tabs(['Combined Results', 'Private Results'])
+    t1, t2 = st.tabs(['Combined Results', 'Private Result'])
     
     with t1:
         cols = st.columns((1,1,1))
@@ -449,22 +481,47 @@ def step_view_results():
     # use visualization library to show images of pags as well
     return
 
+# ,--.   ,--.        ,--.            ,------.                            ,---.   ,--.                         ,--.                         
+# |   `.'   | ,--,--.`--',--,--,     |  .--. ' ,--,--. ,---.  ,---.     '   .-',-'  '-.,--.--.,--.,--. ,---.,-'  '-.,--.,--.,--.--. ,---.  
+# |  |'.'|  |' ,-.  |,--.|      \    |  '--' |' ,-.  || .-. || .-. :    `.  `-.'-.  .-'|  .--'|  ||  || .--''-.  .-'|  ||  ||  .--'| .-. : 
+# |  |   |  |\ '-'  ||  ||  ||  |    |  | --' \ '-'  |' '-' '\   --.    .-'    | |  |  |  |   '  ''  '\ `--.  |  |  '  ''  '|  |   \   --. 
+# `--'   `--' `--`--'`--'`--''--'    `--'      `--`--'.`-  /  `----'    `-----'  `--'  `--'    `----'  `---'  `--'   `----' `--'    `----'
 
 def main():
-    st.write('# Welcome to {Some App}')
     
-    # todo: add time check to only health check periodically. Or only once?
-    check_server_connection()
-    # TODO: refresh current room when in room alreadz
+    st.write('# Welcome to {Some App}')
+
+    col1, col2, _ = st.columns((1,1,3))
+    col1.write('<sup>View our paper [here](https://www.google.com)</sup>', unsafe_allow_html=True)
+    col2.write('<sup>View our GitHub [here](https://www.google.com)</sup>', unsafe_allow_html=True)
+    
+    if check_server_connection():
+        st.info('Server connection established' + ('' if st.session_state['username'] is None else f" - checked in as: {st.session_state['username']}"))
+  
+    refresh_failure = False
+    # refresh current room
     if st.session_state['current_room'] is not None:
-        r = requests.post(url = f'{server_url}/rooms/{st.session_state["current_room"]["name"]}', json={'id': st.session_state['server_provided_user_id'],
-                                                                                                        'username': st.session_state['username']})
-        if r.status_code == 200:
-            st.session_state['current_room'] = r.json()
-        else:
-            st.error('An error occured trying to update current room data')
+        try:
+            r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{st.session_state["current_room"]["name"]}', payload={'id': st.session_state['server_provided_user_id'],
+                                                                                                            'username': st.session_state['username']})
+            if r is None:
+                return
+            if r.status_code == 200:
+                st.session_state['current_room'] = r.json()
+            else:
+                st.session_state['current_room'] = None
+        except:
+            refresh_failure = True
         
     step = stx.stepper_bar(steps=["Server Check-In", "Upload Data", "Process Data", "Join Room", "View Result"], lock_sequence=False)
+    
+    if refresh_failure:
+        st.error('An error occured trying to update current room data')
+        return
+    
+    if step > 0 and st.session_state['is_connected_to_server'] == False:
+        st.warning('Please ensure you have a connection to the server before continuing')
+        return
 
     if step == 0:
         # todo: add ip field for server
@@ -489,12 +546,14 @@ def main():
             step_show_room_details()
     elif step == 4:
         # TODO: verify that data has provided results
-        if st.session_state['room_result'] is None:
+        if st.session_state['current_room'] is None or st.session_state['current_room']['result'] is None:
             st.info("Please run IOD before attempting to view results")
             return
         step_view_results()
     else:
-        st.error('Please reload the page - Stepper out of range')
+        st.error('An error occured. Please reload the page')
 
+    if step > 2:
+        st_autorefresh(interval=3000, limit=100, key="autorefresh")
         
 main()
