@@ -132,6 +132,10 @@ class DataSubmissionRequest(BasicRequest):
     data: str
     data_labels: List[str]
     
+@dataclass
+class IODExecutionRequest(BasicRequest):
+    alpha: float
+    
 
 # ,------.            ,--.               ,---.   ,--.                         ,--.                                
 # |  .-.  \  ,--,--.,-'  '-. ,--,--.    '   .-',-'  '-.,--.--.,--.,--. ,---.,-'  '-.,--.,--.,--.--. ,---.  ,---.  
@@ -558,10 +562,10 @@ async def receive_data(data: DataSubmissionRequest) -> Response:
 # |  |\  \ '  ''  '|  ||  |    |  |'  '-'  '|  '--'  / 
 # `--' '--' `----' `--''--'    `--' `-----' `-------' 
     
-def run_riod(data):
+def run_riod(data, alpha):
     users = []
     
-    ro.r['source']('../scripts/aggregation.r')
+    ro.r['source']('./scripts/aggregation.r')
     aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
     # Reading and processing data
     #df = pl.read_csv("./random-data-1.csv")
@@ -574,9 +578,8 @@ def run_riod(data):
             lv = ro.ListVector(od)
             lvs.append(lv)
             users.append(user)
-        result = aggregate_ci_results_f(lvs)
+        result = aggregate_ci_results_f(lvs, alpha)
 
-        print(result.keys())
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
         g_pag_labels = [list(x[1]) for x in result['G_PAG_Label_List'].items()]
         gi_pag_list = [x[1].tolist() for x in result['Gi_PAG_List'].items()]
@@ -584,7 +587,7 @@ def run_riod(data):
         return g_pag_list, g_pag_labels,  {u:r for u,r in zip(users, gi_pag_list)}, {u:l for u,l in zip(users, gi_pag_labels)}
     
 @post("/rooms/{room_name:str}/run")
-async def run_iod(data: BasicRequest, room_name: str) -> Response:
+async def run_iod(data: IODExecutionRequest, room_name: str) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
@@ -610,7 +613,7 @@ async def run_iod(data: BasicRequest, room_name: str) -> Response:
         participant_data_labels.append(conn.data_labels)
         
     try:
-        result, result_labels, user_result, user_labels = run_riod(zip(participants, participant_data, participant_data_labels))
+        result, result_labels, user_result, user_labels = run_riod(zip(participants, participant_data, participant_data_labels), alpha=data.alpha)
     except:
         room = rooms[room_name]
         room.is_processing = False

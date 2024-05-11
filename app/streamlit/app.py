@@ -7,13 +7,16 @@ import pandas as pd
 import requests
 import graphviz
 import datetime
-
+import os
 import pickle
 import base64
 
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
 
+
+# TODO: Make alpha in IOD configurable (server)
+# TODO: Make m.max configurable
 
 # launch command
 # streamlit run app.py --server.enableXsrfProtection false
@@ -27,7 +30,10 @@ from rpy2.robjects import pandas2ri
 if 'username' not in st.session_state:
     st.session_state['username'] = None
 if 'server_url' not in st.session_state:
-    st.session_state['server_url'] = 'http://127.0.0.1:8000' # TODO: load default url from config file
+    if 'LITESTAR_HOST' in os.environ and 'LITESTAR_PORT' in os.environ:
+        st.session_state['server_url'] = f'http://{os.environ["LITESTAR_HOST"]}:{os.environ["LITESTAR_PORT"]}' # TODO: load default url from config file
+    else:
+        st.session_state['server_url'] = 'http://127.0.0.1:8000'
 if 'last_health_check' not in st.session_state:
     st.session_state['last_health_check'] = None
 if 'is_connected_to_server' not in st.session_state:
@@ -37,6 +43,9 @@ if 'server_provided_user_id' not in st.session_state:
     st.session_state['server_provided_user_id'] = None
 if 'current_room' not in st.session_state:
     st.session_state['current_room'] = None
+    
+if '_alpha_value' not in st.session_state:
+    st.session_state['_alpha_value'] = 0.05
 
 if 'uploaded_data' not in st.session_state:
     st.session_state['uploaded_data'] = None
@@ -192,7 +201,7 @@ def step_process_data():
             # Call R function
             with (ro.default_converter + pandas2ri.converter).context():
                 # load local-ci script
-                ro.r['source']('../scripts/local-ci.r')
+                ro.r['source']('./scripts/local-ci.r')
                 # load function from R script
                 run_ci_test_f = ro.globalenv['run_ci_test']
                 
@@ -235,11 +244,14 @@ def step_process_data():
                                  Be sure no sensitive data is submitted!''')
 
     if st.session_state['result_pvals'] is not None:
-        df_pvals = st.session_state['result_pvals']
+        df_pvals = st.session_state['result_pvals'].copy()
         labels = st.session_state['result_labels']
-        with st.expander('Variable Mapping'):
-            for id2label in [f'{i+1} $\\rightarrow$ {l}' for i,l in enumerate(labels)]:
-                st.markdown("- " + id2label)
+        #with st.expander('Variable Mapping'):
+        #    for id2label in [f'{i+1} $\\rightarrow$ {l}' for i,l in enumerate(labels)]:
+        #        st.markdown("- " + id2label)
+        df_pvals['X'] = df_pvals['X'].apply(lambda x: labels[int(x)-1])
+        df_pvals['Y'] = df_pvals['Y'].apply(lambda x: labels[int(x)-1])
+        df_pvals['S'] = df_pvals['S'].apply(lambda x: ','.join(sorted([labels[int(xi)-1] for xi in x.split(',') if xi != ''])))
         st.dataframe(dataframe_explorer(df_pvals), use_container_width=True)
         
     return
@@ -330,7 +342,9 @@ def step_join_rooms():
 
 def step_show_room_details():
     room = st.session_state['current_room']
-    if room['is_finished']:
+    if room['is_processing']:
+        st.write(f"## Room: {st.session_state['current_room']['name']} (in progress)")
+    elif room['is_finished']:
         st.write(f"## Room: {st.session_state['current_room']['name']} (finished)")
     else:
         st.write(f"## Room: {st.session_state['current_room']['name']} ({'hidden' if room['is_hidden'] else 'public'}) ({'locked' if room['is_locked'] else 'open'})")
@@ -392,7 +406,9 @@ def step_show_room_details():
         
     if col5.button(':fire:', help='Run IOD on participant data', disabled=st.session_state['username']!=room['owner_name']):
         r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/run', payload={'id': st.session_state['server_provided_user_id'],
-                                                                                 'username': st.session_state['username']})
+                                                                                 'username': st.session_state['username'],
+                                                                                 'alpha': round(st.session_state['alpha_value'],2)
+                                                                                 })
         if r is None:
             return
         if r.status_code == 200:
@@ -400,6 +416,20 @@ def step_show_room_details():
             st.rerun()
             return
         st.error(f'An error occured while trying to run IOD')
+        
+    def change_alpha_value():
+        st.session_state['_alpha_value'] = st.session_state['alpha_value']
+        
+    # Run config
+    _, col1, _ = st.columns((1,5,1))
+    col1.number_input('Select alpha value:',
+                      value=st.session_state['_alpha_value'],
+                      min_value=0.0,
+                      max_value=1.0,
+                      step=0.01,
+                      key='alpha_value',
+                      format='%.2f',
+                      on_change=change_alpha_value)
     
     col_structure = (1,3,3,1)
     room_fields = ['№', 'Name', 'Provided Labels', 'Action']
@@ -413,13 +443,12 @@ def step_show_room_details():
         
         user_str = f"{user}"
         if user == st.session_state['username']:
-            user_str += " (you)"
+            user_str += " *(you)*"
         if user == room['owner_name']:
-            user_str += " (owner)"
+            user_str += " *(owner)*"
         col2.write(user_str)
         
         with col3.expander('Show'):
-            print(room)
             for label in sorted(room['user_provided_labels'][user]):
                 st.markdown(f'- {label}')
         
@@ -476,7 +505,8 @@ def step_view_results():
             cols[i%3].write('---')
             
     with t2:
-        st.graphviz_chart(private_result_graph)
+        _, col1, _ = st.columns((1,1,1))
+        col1.graphviz_chart(private_result_graph)
         
     # use visualization library to show images of pags as well
     return

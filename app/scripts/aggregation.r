@@ -11,7 +11,7 @@ library(rIOD)
 n_cores <- 8
 plan("multicore", workers = n_cores, gc=TRUE)
 
-aggregate_ci_results <- function(ci_data) {
+aggregate_ci_results <- function(ci_data, alpha) {
     citestResultsList <- list()
     index <- 1
     for (cur_dat in ci_data) {
@@ -22,7 +22,7 @@ aggregate_ci_results <- function(ci_data) {
     suffStat <- list()
     suffStat$citestResultsList <- citestResultsList
     # call IOD.
-    alpha <- 0.05
+    #alpha <- 0.05
     iod_out <- IOD(suffStat, alpha)
 
     index <- 1
