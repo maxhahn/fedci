@@ -1,6 +1,13 @@
 # Use the official R base image from Docker Hub
 FROM rocker/r-ver:4.4
 
+# ,---.                 ,--.                       ,--------.             ,--.        
+# '   .-',--. ,--.,---.,-'  '-. ,---. ,--,--,--.    '--.  .--',---.  ,---. |  | ,---.  
+# `.  `-. \  '  /(  .-''-.  .-'| .-. :|        |       |  |  | .-. || .-. ||  |(  .-'  
+# .-'    | \   ' .-'  `) |  |  \   --.|  |  |  |       |  |  ' '-' '' '-' '|  |.-'  `) 
+# `-----'.-'  /  `----'  `--'   `----'`--`--`--'       `--'   `---'  `---' `--'`----'  
+#        `---'  
+
 RUN apt update && apt upgrade -y
 
 RUN apt install -y cmake \
@@ -8,6 +15,13 @@ RUN apt install -y cmake \
     libv8-dev \
     libgsl-dev \
     libmagick++-dev
+
+# ,------.     ,------.               ,--.                                 
+# |  .--. '    |  .--. ' ,--,--. ,---.|  |,-. ,--,--. ,---.  ,---.  ,---.  
+# |  '--'.'    |  '--' |' ,-.  || .--'|     /' ,-.  || .-. || .-. :(  .-'  
+# |  |\  \     |  | --' \ '-'  |\ `--.|  \  \\ '-'  |' '-' '\   --..-'  `) 
+# `--' '--'    `--'      `--`--' `---'`--'`--'`--`--'.`-  /  `----'`----'  
+#                                                     `---' 
 
 # Copy your R project files
 COPY ./rIOD /rIOD
@@ -18,7 +32,6 @@ RUN install2.r -e MXM pscl dagitty DOT rsvg BFF BiocManager
 RUN R -e "BiocManager::install(c('graph', 'RBGL', 'Rgraphviz'))"
 RUN install2.r -e rje pcalg jsonlite lavaan doFuture gtools
 
-
 # install FCI Utils
 RUN R CMD INSTALL imports/FCI.Utils_1.0.tar.gz 
 
@@ -26,4 +39,30 @@ RUN R CMD INSTALL imports/FCI.Utils_1.0.tar.gz
 RUN R CMD build . 
 RUN R CMD INSTALL rIOD_1.0.tar.gz 
 
-ENTRYPOINT /bin/bash
+# ,------.            ,--.  ,--.                        ,------.               ,--.                                 
+# |  .--. ',--. ,--.,-'  '-.|  ,---.  ,---. ,--,--,     |  .--. ' ,--,--. ,---.|  |,-. ,--,--. ,---.  ,---.  ,---.  
+# |  '--' | \  '  / '-.  .-'|  .-.  || .-. ||      \    |  '--' |' ,-.  || .--'|     /' ,-.  || .-. || .-. :(  .-'  
+# |  | --'   \   '    |  |  |  | |  |' '-' '|  ||  |    |  | --' \ '-'  |\ `--.|  \  \\ '-'  |' '-' '\   --..-'  `) 
+# `--'     .-'  /     `--'  `--' `--' `---' `--''--'    `--'      `--`--' `---'`--'`--'`--`--'.`-  /  `----'`----'  
+#          `---'                                                                              `---'  
+
+COPY ./app /app
+WORKDIR /app
+
+# get pip
+RUN apt install -y pip
+# Python packages
+RUN python3 -m pip install --upgrade pip setuptools wheel
+RUN pip install pandas graphviz rpy2 litestar[standard] streamlit extra-streamlit-components streamlit-extras streamlit-autorefresh
+
+# Set up default env vars
+ENV STREAMLIT_SERVER_PORT=8081
+ENV LITESTAR_PORT=8080
+ENV LITESTAR_HOST=127.0.0.1
+
+# make startup script executable
+RUN chmod +x startup.sh
+# Draws config from env vars
+CMD ./startup.sh
+
+#ENTRYPOINT /bin/bash
