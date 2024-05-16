@@ -35,6 +35,7 @@ class Connection:
 class Room:
     name: str
     owner_name: str
+    password: str
     is_locked: bool
     is_hidden: bool
     is_processing: bool
@@ -82,6 +83,7 @@ class RoomDetailsDTO:
     is_hidden: bool
     is_processing: bool
     is_finished: bool
+    is_protected: bool
     users: List[str]
     user_provided_labels: Dict[str, List[str]]
     result: List[List[List[int]]]
@@ -96,6 +98,7 @@ class RoomDetailsDTO:
         self.is_hidden = room.is_hidden
         self.is_processing = room.is_processing
         self.is_finished = room.is_finished
+        self.is_protected = room.password is not None
         self.users = sorted(list(room.users))
         self.user_provided_labels = room.user_provided_labels
         self.result = room.result
@@ -126,6 +129,11 @@ class ChangeUsernameRequest(BasicRequest):
 @dataclass
 class RoomCreationRequest(BasicRequest):
     room_name: str
+    password: str
+    
+@dataclass
+class JoinRoomRequest(BasicRequest):
+    password: str
     
 @dataclass
 class DataSubmissionRequest(BasicRequest):
@@ -327,7 +335,8 @@ async def create_room(data: RoomCreationRequest) -> Response:
     
     room = Room(name=new_room_name,
                 owner_name=room_owner,
-                is_locked=True,
+                password=data.password,
+                is_locked=False,
                 is_hidden=False,
                 is_processing=False,
                 is_finished=False,
@@ -350,7 +359,7 @@ async def create_room(data: RoomCreationRequest) -> Response:
 
 # join room
 @post("/rooms/{room_name:str}/join")
-async def join_room(data: BasicRequest, room_name: str) -> Response:
+async def join_room(data: JoinRoomRequest, room_name: str) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if data.username in user2room:
@@ -365,6 +374,8 @@ async def join_room(data: BasicRequest, room_name: str) -> Response:
     
     if room.is_locked:
         raise HTTPException(detail='The room is locked', status_code=403)
+    if room.password != data.password:
+        raise HTTPException(detail='Incorrect password', status_code=403)
     
     room.users.add(data.username)
     room.user_provided_labels[data.username] = connections[data.id].data_labels
