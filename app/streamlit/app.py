@@ -12,7 +12,9 @@ import pickle
 import base64
 import shutil
 from collections import OrderedDict
-import glob
+import zipfile
+import io
+
 
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
@@ -27,21 +29,12 @@ from rpy2.robjects import pandas2ri
 client_base_dir = './IOD/client-data'
 upload_dir = f'{client_base_dir}/uploaded_files'
 ci_result_dir = f'{client_base_dir}/ci'
-pag_renderings_dir = f'{client_base_dir}/pags'
-
-server_base_dir = './IOD/server-data'
-pag_server_renderings_dir = f'{server_base_dir}/pags'
 
 # Init upload files dir
 if not os.path.exists(upload_dir):
     os.makedirs(upload_dir, exist_ok=True)
 if not os.path.exists(ci_result_dir):
     os.makedirs(ci_result_dir, exist_ok=True)
-if not os.path.exists(pag_renderings_dir):
-    os.makedirs(pag_renderings_dir, exist_ok=True)
-    
-if not os.path.exists(pag_server_renderings_dir):
-    os.makedirs(pag_server_renderings_dir, exist_ok=True)
 
 #  ,---.   ,--.            ,--.             ,--.        ,--.  ,--.   
 # '   .-',-'  '-. ,--,--.,-'  '-. ,---.     |  |,--,--, `--',-'  '-. 
@@ -284,7 +277,6 @@ def step_process_data():
                 help='Delete current progress, so that data can be reprocessed from scratch',
                 disabled=not os.path.exists(f'{ci_result_dir}/{filename}'), use_container_width=True):
         os.remove(f'{ci_result_dir}/{filename}')
-        os.remove(f'{pag_renderings_dir}/{fileid}.png')
         st.session_state['result_pvals'] = None
         st.rerun()
         return
@@ -389,17 +381,14 @@ def step_process_data():
                 pag_mat = run_local_fci()
                 pag = data2graph(pag_mat, st.session_state['result_labels'])
             
-            pag_png_path = pag.render(filename=fileid, directory=pag_renderings_dir, format='png', raise_if_result_exists=False)
-            
             _, col1, _ = st.columns((1,1,1))
-            with open(pag_png_path, 'rb') as f:
-                btn = col1.download_button(
-                    label="Download PAG",
-                    data=f,
-                    file_name=f"pag-{fileid}.png",
-                    mime="image/png", use_container_width=True
-                )
-            col1.graphviz_chart(pag, use_container_width=True)
+            col1.download_button(
+                label="Download PAG",
+                data=pag.pipe(format='png'),
+                file_name=f"local-pag-{fileid}.png",
+                mime="image/png", use_container_width=True
+            )
+            col1.graphviz_chart(pag)
         
     return
 
@@ -420,7 +409,6 @@ def room_creation_password_dialog(room_name):
     password = st.text_input("Please enter your password here. Leave empty for no password.")
     _, col1 = st.columns((6,1))
     if col1.button(':arrow_right:', help='Continue with chosen password', use_container_width=True):
-        st.session_state['do_autorefresh'] = True
         if len(password) == 0:
             password = None
 
@@ -428,9 +416,11 @@ def room_creation_password_dialog(room_name):
                                                                 'username': st.session_state['username'],
                                                                 'room_name': room_name,
                                                                 'password': password})
+
         if r is None:
             return
         if r.status_code == 200:
+            st.session_state['do_autorefresh'] = True
             st.session_state['current_room'] = r.json()
             st.rerun()
             return
@@ -445,21 +435,25 @@ def room_join_password_dialog(room_name):
     password = st.text_input("Please enter the password:")
     _, col1 = st.columns((6,1))
     if col1.button(':arrow_right:', help='Continue with chosen password', use_container_width=True):
-        st.session_state['do_autorefresh'] = True
         if len(password) == 0:
             password = None
 
-        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/create', payload={'id': st.session_state['server_provided_user_id'],
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room_name}/join', payload={'id': st.session_state['server_provided_user_id'],
                                                                 'username': st.session_state['username'],
-                                                                'room_name': room_name,
                                                                 'password': password})
+        
+        
         if r is None:
             return
         if r.status_code == 200:
+            st.session_state['do_autorefresh'] = True
             st.session_state['current_room'] = r.json()
             st.rerun()
             return
-        st.error('An error occured trying to create the room')
+        st.error('''An error occured trying to join the room.  
+                 The password might be incorrect.''')
+        #st.toast('Yay')
+        #st.rerun()
     return
 
 def step_join_rooms():
@@ -469,23 +463,17 @@ def step_join_rooms():
     col1, col2, col3, col4 = st.columns((7,1,1,1))
 
     room_name = col1.text_input('Please chose a room name', label_visibility='collapsed')
-    if col2.button(':arrow_right:', help='Join room', disabled=room_name is None):
-        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room_name}/join', payload={'id': st.session_state['server_provided_user_id'],
-                                                                'username': st.session_state['username']})
+    if room_name is None or len(room_name)==0:
+        room_name = f"{st.session_state['username']}'s Room"
         
-        # TODO: attempt to join - if it is protected, password dialog and retry join
-        if r is None:
-            return
-        if r.status_code == 200:
-            st.session_state['current_room'] = r.json()
-            st.rerun()
-            return 
-        st.error('An error occured trying to join the room')
+    if col2.button(':arrow_right:', help='Join room', disabled=room_name is None):
+        room_join_password_dialog(room_name)
     
     if col3.button(':tada:', help='Create room', disabled=room_name is None):
         room_creation_password_dialog(room_name)
         
     if col4.button(':arrows_counterclockwise:', help='Refresh the room'):
+        st.session_state['do_autorefresh'] = True
         st.rerun()
         return
 
@@ -511,19 +499,24 @@ def step_join_rooms():
         col.write(field_name)
     for i, room in enumerate(rooms):
         col1, col2, col3 = st.columns(col_structure)
-        col1.write(room['name'])
+        col1.write(f"{room['name']} {'*(protected)*' if room['is_protected'] else ''}")
         col2.write(room['owner_name'])
         if col3.button(':arrow_right:', help='Room is locked' if room['is_locked'] else 'Join', disabled=room['is_locked'], key=f'join-button-{i}'):
-            r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/join', payload={'id': st.session_state['server_provided_user_id'],
-                                                                'username': st.session_state['username']})
-            if r is None:
-                return
-            if r.status_code == 200:
-                st.session_state['current_room'] = r.json()
-                st.rerun()
-                return
-            
-            st.error('An error occured trying to join the room')
+            if room['is_protected']:
+                room_join_password_dialog(room['name'])
+            else:
+                r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/join', payload={'id': st.session_state['server_provided_user_id'],
+                                                                'username': st.session_state['username'],
+                                                                'password': None})
+        
+                if r is None:
+                    return
+                if r.status_code == 200:
+                    st.session_state['do_autorefresh'] = True
+                    st.session_state['current_room'] = r.json()
+                    st.rerun()
+                    return
+                st.error('An error occured trying to join the room.')
     return
 
 # ,------.                             ,------.           ,--.          ,--.,--.        
@@ -535,15 +528,17 @@ def step_join_rooms():
 def step_show_room_details():
     room = st.session_state['current_room']
     if room['is_processing']:
-        st.write(f"## Room: {st.session_state['current_room']['name']} (in progress)")
+        st.write(f"## Room: {st.session_state['current_room']['name']} <sup>(in progress)</sup>", unsafe_allow_html=True)
     elif room['is_finished']:
-        st.write(f"## Room: {st.session_state['current_room']['name']} (finished)")
+        st.write(f"## Room: {st.session_state['current_room']['name']} <sup>(finished)</sup>", unsafe_allow_html=True)
+        st.session_state['do_autorefresh'] = False
     else:
-        st.write(f"## Room: {st.session_state['current_room']['name']} ({'hidden' if room['is_hidden'] else 'public'}) ({'locked' if room['is_locked'] else 'open'})")
+        st.write(f"## Room: {st.session_state['current_room']['name']} <sup>({'hidden' if room['is_hidden'] else 'public'}) ({'locked' if room['is_locked'] else 'open'}) {'(protected)' if room['is_protected'] else ''}</sup>", unsafe_allow_html=True)
     
     _, col1, col2, col3, col4, col5, _ = st.columns((1,1,1,1,1,1,1))
         
     if col1.button(':arrows_counterclockwise:', help='Refresh the room', use_container_width=True):
+        st.session_state['do_autorefresh'] = True
         st.rerun()
         return
     
@@ -591,6 +586,7 @@ def step_show_room_details():
         if r is None:
             return
         if r.status_code == 200:
+            st.session_state['do_autorefresh'] = True
             st.session_state['current_room'] = None
             st.rerun()
             return
@@ -690,14 +686,38 @@ def step_view_results():
     
     t1, t2 = st.tabs(['Combined Results', 'Private Result'])
     
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        for file_name, data in [(f"federated-pag-{i}.png",g.pipe(format='png')) for i, g in enumerate(result_graphs)]:
+            zip_file.writestr(file_name, data)
+            
     with t1:
+        _, col1, _ = st.columns((1,2,1))
+        col1.download_button(
+                label="Download all PAGs",
+                data=zip_buffer,
+                file_name=f"federated-pags.zip" ,
+                mime="application/x-zip", use_container_width=True
+            )
         cols = st.columns((1,1,1))
         for i,g in enumerate(result_graphs):
+            cols[i%3].download_button(
+                label="Download PAG",
+                data=g.pipe(format='png'),
+                file_name=f"federated-pag-{i}.png",
+                mime="image/png", use_container_width=True
+            )
             cols[i%3].graphviz_chart(g)
             cols[i%3].write('---')
             
     with t2:
         _, col1, _ = st.columns((1,1,1))
+        col1.download_button(
+                label="Download PAG",
+                data=private_result_graph.pipe(format='png'),
+                file_name="federated-private-pag.png",
+                mime="image/png", use_container_width=True
+            )
         col1.graphviz_chart(private_result_graph)
         
     # use visualization library to show images of pags as well
@@ -746,7 +766,6 @@ def main():
         return
 
     if step == 0:
-        # todo: add ip field for server
         step_check_in_to_server()
     elif step == 1:
         if st.session_state['username'] is None:
@@ -771,6 +790,7 @@ def main():
         if st.session_state['current_room'] is None or st.session_state['current_room']['result'] is None:
             st.info("Please run IOD before attempting to view results")
             return
+        st.session_state['do_autorefresh'] = False
         step_view_results()
     else:
         st.error('An error occured. Please reload the page')

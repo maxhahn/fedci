@@ -70,10 +70,13 @@ class RoomDTO:
     name: str
     owner_name: str
     is_locked: bool
+    is_protected: bool
     def __init__(self, room: Room):
         self.name = room.name
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
+        self.is_protected = room.password is not None
+        
         
 @dataclass
 class RoomDetailsDTO:
@@ -129,11 +132,11 @@ class ChangeUsernameRequest(BasicRequest):
 @dataclass
 class RoomCreationRequest(BasicRequest):
     room_name: str
-    password: str
+    password: str | None
     
 @dataclass
 class JoinRoomRequest(BasicRequest):
-    password: str
+    password: str | None
     
 @dataclass
 class DataSubmissionRequest(BasicRequest):
@@ -322,6 +325,8 @@ async def get_room(data: BasicRequest, room_name: str) -> Response:
 async def create_room(data: RoomCreationRequest) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
+    if len(data.room_name) == 0:
+        raise HTTPException(detail='The room must have a name with at least 1 character', status_code=400)
     
     room_owner = data.username
     room_name = data.room_name
