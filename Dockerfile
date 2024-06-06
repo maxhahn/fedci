@@ -55,14 +55,8 @@ RUN apt install -y pip
 RUN python3 -m pip install --upgrade pip setuptools wheel
 RUN pip install pandas graphviz rpy2 litestar[standard] streamlit extra-streamlit-components streamlit-extras streamlit-autorefresh
 
-# Set up default env vars
-ENV STREAMLIT_SERVER_PORT=8081
-ENV LITESTAR_PORT=8080
-ENV LITESTAR_HOST=127.0.0.1
-
 # make startup script executable
 RUN chmod +x startup.sh
 # Draws config from env vars
 CMD ./startup.sh
 
-#ENTRYPOINT /bin/bash

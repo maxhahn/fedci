@@ -10,5 +10,3 @@ else
     echo 'Please choose on of >CLIENT<, >SERVER<, or >HYBRID< as the MODE environment variable'
     exit 1
 fi
-
-# LITESTAR_PORT

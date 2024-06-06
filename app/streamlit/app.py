@@ -45,10 +45,10 @@ if not os.path.exists(ci_result_dir):
 if 'username' not in st.session_state:
     st.session_state['username'] = None
 if 'server_url' not in st.session_state:
-    if 'LITESTAR_HOST' in os.environ and 'LITESTAR_PORT' in os.environ:
-        st.session_state['server_url'] = f'http://{os.environ["LITESTAR_HOST"]}:{os.environ["LITESTAR_PORT"]}' # TODO: load default url from config file
+    if 'LITESTAR_CONTAINER_NAME' in os.environ and 'LITESTAR_PORT' in os.environ:
+        st.session_state['server_url'] = f'http://{os.environ["LITESTAR_CONTAINER_NAME"]}:{os.environ["LITESTAR_PORT"]}' # TODO: load default url from config file
     else:
-        st.session_state['server_url'] = 'http://127.0.0.1:8000'
+        st.session_state['server_url'] = 'http://127.0.0.1:8080'
 if 'last_health_check' not in st.session_state:
     st.session_state['last_health_check'] = None
 if 'is_connected_to_server' not in st.session_state:
