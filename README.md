@@ -1,5 +1,7 @@
 # rIOD
 
+todo: algorithm descriptions not yet correct.
+
 This project implements the IOD algorithm described in TODO.
 
 A web app is provided which allows you to connect to a running server instance.  
