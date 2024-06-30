@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 
 from typing import Annotated, List, Dict, Set, Optional
 
@@ -13,8 +14,11 @@ from collections import OrderedDict
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
 import pandas as pd
+import numpy as np
 import pickle
 import base64
+
+import fedci as fedci
 
 
 # ,------.          ,--.  ,--.  ,--.  ,--.               
@@ -30,10 +34,27 @@ class Connection:
     last_request_time: datetime.datetime
     data: Optional[pd.DataFrame]=None
     data_labels: Optional[List[str]]=None
-
+    
+class RoomType(str, Enum):
+    P_VALUE_AGGREGATION = 'p_value_aggregation'
+    FEDERATED_GLM = 'federated_glm'
+    
+@dataclass
+class FederatedGLMData:
+    xwx: np.typing.NDArray
+    xwz: np.typing.NDArray
+    local_deviance: float
+    
+@dataclass
+class FederatedGLMTesting:
+    testing_engine: fedci.TestingEngine
+    pending_data: Dict[str, FederatedGLMData]
+    start_of_last_iteration: datetime.datetime
+    
 @dataclass
 class Room:
     name: str
+    room_type: RoomType
     owner_name: str
     password: str
     is_locked: bool
@@ -46,6 +67,8 @@ class Room:
     result_labels: List[List[str]]
     user_results: Dict[str, List[List[int]]]
     user_labels: Dict[str, List[str]]
+    federated_glm: FederatedGLMTesting
+    
     
 # ,------. ,--------. ,-----.         
 # |  .-.  \'--.  .--''  .-.  ' ,---.  
@@ -66,13 +89,35 @@ class UserDTO:
         self.data_labels = conn.data_labels if self.submitted_data else None
         
 @dataclass
+class FederatedGLMStatus:
+    y_label: str
+    X_labels: List[str]
+    is_awaiting_response: bool
+    current_beta: np.typing.NDArray
+    current_iteration: int
+    current_relative_change_in_deviance: float
+    start_of_last_iteration: datetime.datetime
+    
+    def __init__(self, glm_testing_state: FederatedGLMTesting, requesting_user: str):
+        testing_round: fedci.TestingRound = glm_testing_state.testing_engine.testing_rounds[0] # todo: might cause errors
+        self.y_label = testing_round.y_label
+        self.X_labels = testing_round.X_labels
+        self.is_awaiting_response = requesting_user is not None and glm_testing_state.pending_data.get(requesting_user) is not None
+        self.current_beta = testing_round.beta
+        self.current_iteration = testing_round.iterations
+        self.current_relative_change_in_deviance = testing_round.get_relative_change_in_deviance()
+        self.start_of_last_iteration = glm_testing_state.start_of_last_iteration
+        
+@dataclass
 class RoomDTO:
     name: str
+    room_type: RoomType
     owner_name: str
     is_locked: bool
     is_protected: bool
     def __init__(self, room: Room):
         self.name = room.name
+        self.room_type = room.room_type
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
         self.is_protected = room.password is not None
@@ -81,6 +126,7 @@ class RoomDTO:
 @dataclass
 class RoomDetailsDTO:
     name: str
+    room_type: RoomType
     owner_name: str
     is_locked: bool
     is_hidden: bool
@@ -93,9 +139,11 @@ class RoomDetailsDTO:
     result_labels: List[List[str]]
     private_result: List[List[int]]
     private_labels: List[str]
+    federated_glm_status: FederatedGLMStatus
     
     def __init__(self, room: Room, requesting_user: str=None):
         self.name = room.name
+        self.room_type = room.room_type
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
         self.is_hidden = room.is_hidden
@@ -108,6 +156,7 @@ class RoomDetailsDTO:
         self.result_labels = room.result_labels
         self.private_result = room.user_results[requesting_user] if room.user_results is not None and requesting_user in room.user_results else None
         self.private_labels = room.user_labels[requesting_user] if room.user_labels is not None and requesting_user in room.user_labels else None
+        self.federated_glm_status = FederatedGLMStatus(room.federated_glm, requesting_user)
         
 # ,------.                                      ,--.          
 # |  .--. ' ,---.  ,---. ,--.,--. ,---.  ,---.,-'  '-. ,---.  
@@ -132,6 +181,7 @@ class ChangeUsernameRequest(BasicRequest):
 @dataclass
 class RoomCreationRequest(BasicRequest):
     room_name: str
+    room_type: str
     password: str | None
     
 @dataclass
@@ -146,6 +196,11 @@ class DataSubmissionRequest(BasicRequest):
 @dataclass
 class IODExecutionRequest(BasicRequest):
     alpha: float
+    
+@dataclass
+class FedGLMDataProvidingRequest(BasicRequest, FederatedGLMData):
+    current_beta: np.typing.NDArray
+    current_iteration: int
     
 
 # ,------.            ,--.               ,---.   ,--.                         ,--.                                
@@ -339,6 +394,7 @@ async def create_room(data: RoomCreationRequest) -> Response:
         room_name_offset += 1
     
     room = Room(name=new_room_name,
+                room_type=data.room_type,
                 owner_name=room_owner,
                 password=data.password,
                 is_locked=False,
@@ -350,7 +406,8 @@ async def create_room(data: RoomCreationRequest) -> Response:
                 result=None,
                 result_labels=None,
                 user_results={},
-                user_labels={}
+                user_labels={},
+                federated_glm=None
                 )
     
     rooms[new_room_name] = room
@@ -602,8 +659,25 @@ def run_riod(data, alpha):
         gi_pag_labels = [list(x[1]) for x in result['Gi_PAG_Label_List'].items()]
         return g_pag_list, g_pag_labels,  {u:r for u,r in zip(users, gi_pag_list)}, {u:l for u,l in zip(users, gi_pag_labels)}
     
+def run_iod(data, room_name):
+    room = rooms[room_name]
+     
+    # gather data of all participants
+    participant_data = []
+    participant_data_labels = []
+    participants = room.users
+    for user in participants:
+        conn = user2connection[user]
+        participant_data.append(conn.data)
+        participant_data_labels.append(conn.data_labels)
+        
+    return run_riod(zip(participants, participant_data, participant_data_labels), alpha=data.alpha)
+    
+def run_fed_glm(data, room_name):
+    pass
+    
 @post("/rooms/{room_name:str}/run")
-async def run_iod(data: IODExecutionRequest, room_name: str) -> Response:
+async def run(data: IODExecutionRequest, room_name: str) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
@@ -619,17 +693,12 @@ async def run_iod(data: IODExecutionRequest, room_name: str) -> Response:
     room.is_hidden = True
     rooms[room_name] = room
     
-    # gather data of all participants
-    participant_data = []
-    participant_data_labels = []
-    participants = room.users
-    for user in participants:
-        conn = user2connection[user]
-        participant_data.append(conn.data)
-        participant_data_labels.append(conn.data_labels)
+    # ToDo change behavior based on room type:
+    #   one run for pvalue aggregation only
+    #   multiple runs for fedglm -> therefore, return in this function quickly. Set 'is_processing' and update FedGLMStatus etc
         
     try:
-        result, result_labels, user_result, user_labels = run_riod(zip(participants, participant_data, participant_data_labels), alpha=data.alpha)
+        result, result_labels, user_result, user_labels = run_iod(data, room_name)
     except:
         room = rooms[room_name]
         room.is_processing = False
@@ -679,5 +748,5 @@ app = Litestar([
     unlock_room,
     hide_room,
     reveal_room,
-    run_iod
+    run
     ])
