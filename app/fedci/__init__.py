@@ -31,6 +31,9 @@ class TestingRound:
             return None
         return abs(self.deviance - self.last_deviance) / (0.1 + abs(self.deviance))
     
+    def get_required_labels(self):
+        return set([self.y_label] + self.X_labels)
+    
     def aggregate_results(self, results):
         results1, results2, deviances = zip(*results)
         self.beta = np.linalg.inv(sum(results1)) @ sum(results2)
@@ -64,6 +67,11 @@ class TestingEngine:
         curr_testing_round = self.testing_rounds[0]
         return curr_testing_round.y_label, curr_testing_round.X_labels, curr_testing_round.beta
     
+    def get_current_testing_round(self) -> TestingRound:
+        if len(self.testing_rounds) == 0:
+            return None
+        return self.testing_rounds[0]
+    
     def finish_current_test(self):
         self.finished_rounds.append(self.testing_rounds.pop(0))
         self.is_finished = len(self.testing_rounds) == 0
@@ -71,7 +79,6 @@ class TestingEngine:
     def aggregate_results(self, results):
         has_converged = self.testing_rounds[0].aggregate_results(results)
         has_reached_max_iterations = self.testing_rounds[0].iterations >= self.max_iterations
-        print(self.testing_rounds[0])
         if has_converged or has_reached_max_iterations:
             self.finish_current_test()
         

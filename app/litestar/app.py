@@ -672,9 +672,85 @@ def run_iod(data, room_name):
         participant_data_labels.append(conn.data_labels)
         
     return run_riod(zip(participants, participant_data, participant_data_labels), alpha=data.alpha)
+
+
+# todo: should lock written data 
+# todo: verify if object is updated by reference or by value - reassigning to dict may not be required
+@post("/rooms/{room_name:str}/federated-glm-data")
+def provide_fed_glm_data(data: FedGLMDataProvidingRequest, room_name: str):
+    if not validate_user_request(data.id, data.username):
+        raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
+    if room_name not in rooms:
+        raise HTTPException(detail='The room does not exist', status_code=404)
+    room = rooms[room_name]
     
-def run_fed_glm(data, room_name):
-    pass
+    if data.username not in room.federated_glm.pending_data.keys():
+        return Response(
+            content='The provided data was required',
+            status_code=200
+            )
+        
+    curr_testing_round =  room.federated_glm.testing_engine.get_current_testing_round()
+    curr_beta = curr_testing_round.beta
+    curr_iteration = curr_testing_round.iterations
+    
+    if data.current_beta != curr_beta or data.current_iteration != curr_iteration:
+        return Response(
+            content='The provided data was not usable in this iteration',
+            status_code=200
+            )
+
+    fed_glm_data = FederatedGLMData(xwx=data.xwx, xwz=data.xwz, local_deviance=data.local_deviance)
+    room.federated_glm.pending_data[data.username] = fed_glm_data
+    
+    
+    
+    if any([v is None for v in room.federated_glm.pending_data.values()]):
+        rooms[room_name] = room
+    
+        return Response(
+                content='The provided data was accepted',
+                status_code=200
+                )
+        
+    fed_glm_results = [(d.xwx, d.xwz, d.local_deviance) for d in room.federated_glm.pending_data.values()]
+    room.federated_glm.testing_engine.aggregate_results(fed_glm_results)
+    
+    curr_testing_round = room.federated_glm.testing_engine.get_current_testing_round()
+    if curr_testing_round is not None:
+        required_labels = curr_testing_round.get_required_labels()    
+        pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
+        
+        room.federated_glm.pending_data = pending_data
+        room.federated_glm.start_of_last_iteration = datetime.datetime.now()
+    else:
+        # TODO: finish up fed glm and run FCI (probably better to create testing rounds on demand in tandem with running fci)
+        # todo: easier to just run all and calculate likelihood ratio tests.
+        
+        # TODO: Next up: LIKELIHOOD RATIO TESTS
+        room.is_processing = False
+        room.is_finished = True
+        
+    rooms[room_name] = room
+    
+    return Response(
+            content='The provided data was accepted',
+            status_code=200
+            )
+    
+def run_fed_glm(room_name):
+    # data contains alpha for FCI
+    room = rooms[room_name]
+    
+    testing_engine = fedci.TestingEngine(set(*room.user_provided_labels))
+    required_labels = testing_engine.get_current_testing_round().get_required_labels()    
+    pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
+    
+    room.federated_glm = FederatedGLMTesting(testing_engine=testing_engine,
+                                             pending_data=pending_data,
+                                             start_of_last_iteration=datetime.datetime.now())
+    
+    rooms[room_name] = room
     
 @post("/rooms/{room_name:str}/run")
 async def run(data: IODExecutionRequest, room_name: str) -> Response:
