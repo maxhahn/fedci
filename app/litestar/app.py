@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from typing import Annotated, List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional
 
 from litestar import Litestar, MediaType, Response, post, get
 from litestar.exceptions import HTTPException
@@ -18,7 +18,15 @@ import numpy as np
 import pickle
 import base64
 
-import fedci as fedci
+
+import sys
+import os
+# Add the parent directory to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import fedci
+
+#import fedci as fedci
 
 
 # ,------.          ,--.  ,--.  ,--.  ,--.               
@@ -277,7 +285,7 @@ async def health_check() -> Response:
 #                                                                                                   `--'
 
 @post("/check-in")
-async def check_in(data: Annotated[CheckInRequest, Body(title='Check-In', description='Check in to server with a username of choice')]) -> Response:
+async def check_in(data: CheckInRequest) -> Response:
     
     if data.username is None or len(data.username.replace(r'\s', '')) == 0:
         raise HTTPException(detail='Username is not accepted', status_code=400)
@@ -308,7 +316,7 @@ async def check_in(data: Annotated[CheckInRequest, Body(title='Check-In', descri
         )
     
 @post("/change-name")
-async def change_name(data: Annotated[ChangeUsernameRequest, Body(title='Change Name', description='Change displayed username')]) -> Response:
+async def change_name(data: ChangeUsernameRequest) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     
@@ -341,7 +349,7 @@ async def change_name(data: Annotated[ChangeUsernameRequest, Body(title='Change 
 
 # list rooms
 @post("/rooms")
-async def get_rooms(data: Annotated[BasicRequest, Body(title='List Rooms', description='Get a list of all existing rooms')]) -> Response:
+async def get_rooms(data: BasicRequest) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     return Response(

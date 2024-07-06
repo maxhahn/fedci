@@ -244,6 +244,13 @@ def run_local_fci():
     labels = st.session_state['result_labels']
     alpha = st.session_state['local_alpha_value']
     
+    print('HERE LOOK!', '\n'*5)
+    print(df.dtypes)
+    print(df)
+    print(labels)
+    import polars as pl
+    print(pl.from_pandas(df))
+    
     with (ro.default_converter + pandas2ri.converter).context():
         ro.r['source']('./scripts/aggregation.r')
         aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
