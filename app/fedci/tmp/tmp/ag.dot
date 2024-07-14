@@ -1,7 +1,0 @@
-digraph graphname {node [shape = oval];
-X_1 [label= X_1 ]
-Y_2 [label= Y_2 ]
-Z_3 [label= Z_3 ]
-X_1 -> Z_3 [color=black, dir=both,arrowhead=odot, arrowtail=odot];
-Y_2 -> Z_3 [color=black, dir=both,arrowhead=odot, arrowtail=odot];
-}
