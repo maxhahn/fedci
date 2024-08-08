@@ -138,7 +138,7 @@ class TestingEngine:
                 for category, expressions in self.category_expressions.items():
                     if category in var_set:
                         var_set = (set(var_set) - {category}) | set(sorted(list(expressions)[1:])) # [1:] to drop first cat
-                    temp_powerset.append(var_set)
+                temp_powerset.append(var_set)
             powerset_of_regressors = temp_powerset
             
             if y_var in self.category_expressions:
@@ -178,7 +178,7 @@ class Server:
         self.category_expressions = {}
         for _, client in self.clients.items():
             for feature, expressions in client.get_categories().items():
-                self.category_expressions[feature] = list(set(self.category_expressions.get(feature, [])).union(set(expressions)))
+                self.category_expressions[feature] = sorted(list(set(self.category_expressions.get(feature, [])).union(set(expressions))))
         self.reversed_category_expressions = {vi:k for k,v in self.category_expressions.items() for vi in v}
 
         self.testing_engine = TestingEngine(self.available_data, self.category_expressions, max_regressors=max_regressors)
@@ -286,25 +286,6 @@ class Client:
         y_is_categorical = y_label in self.get_categories()
         
         result = self._run_regression(y,X,beta,y_is_categorical)
-        
-        
-        # if self.schema[y_label] == VariableType.CONTINUOS:
-        #     y = self.data[y_label]
-        #     y = y.to_pandas()
-        #     y = y.to_numpy().astype(float)
-            
-        #     result = self._run_regression(y,X,beta)
-            
-        # elif self.schema[y_label] == VariableType.CATEGORICAL:
-        #     y = self.data[y_label].sort().to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
-        #     result = {}
-        #     for y_col in y.columns:
-        #         _y = y[y_col].to_pandas()
-        #         _y = _y.to_numpy().astype(float)
-                
-        #         _result = self._run_regression(_y,X,beta[y_col])
-
-        #         result[y_col] = _result
         
         return result
         
