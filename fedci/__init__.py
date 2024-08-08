@@ -1,4 +1,5 @@
 import polars as pl
+import polars.selectors as cs
 import numpy as np
 import pickle
 from typing import List
@@ -72,8 +73,11 @@ class TestingRound:
         nobs = [v for k,v in self.client_data['nobs'].items() if client_subset is None or k in client_subset]
     
         return {'llf': sum(llf), 'rss': sum(rss), 'nobs': sum(nobs)}
-        
-    def aggregate_results(self, results):
+    
+    def get_test_parameters(self):
+        return self.y_label, self.X_labels, self.beta
+    
+    def update_state(self, results):
         self.providing_clients = set(results.keys())
         
         client_data = [[(k,vi) for vi in v] for k,v in results.items()]
@@ -86,6 +90,17 @@ class TestingRound:
         self.client_data['llf'] = llf
         self.client_data['rss'] = rss
         self.client_data['nobs'] = nobs
+        return
+        
+    def aggregate_results(self, results):
+        self.update_state(results)
+        
+        xtx = self.client_data['xtx']  
+        xtz = self.client_data['xtz']  
+        dev = self.client_data['dev']  
+        llf = self.client_data['llf']  
+        rss = self.client_data['rss']  
+        nobs = self.client_data['nobs']
         
         self.beta = np.linalg.inv(sum(xtx.values())) @ sum(xtz.values())
         self.last_deviance = self.deviance
@@ -98,7 +113,7 @@ class TestingRound:
         return self.get_relative_change_in_deviance() < self.convergence_threshold
     
 class TestingEngine:
-    def __init__(self, available_data, max_regressors=None, max_iterations=25, save_steps=10):
+    def __init__(self, available_data, category_expressions, max_regressors=None, max_iterations=25, save_steps=10):
         self.available_data = available_data
         self.max_regressors = max_regressors
         self.max_iterations = max_iterations
@@ -107,19 +122,36 @@ class TestingEngine:
         self.finished_rounds = []
         self.testing_rounds = []
         
-        _max_conditioning_set_size = min(len(self.available_data)-1, self.max_regressors) if self.max_regressors is not None else len(self.available_data)-1
+        self.category_expressions = category_expressions
+        
+       # _max_conditioning_set_size = min(len(self.available_data)-1, self.max_regressors) if self.max_regressors is not None else len(self.available_data)-1
         
         for y_var in available_data:
             set_of_regressors = available_data - {y_var}
+                
+            _max_conditioning_set_size = min(len(set_of_regressors), self.max_regressors) if self.max_regressors is not None else len(set_of_regressors)
             powerset_of_regressors = chain.from_iterable(combinations(set_of_regressors, r) for r in range(0,_max_conditioning_set_size+1))
-            self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
+            
+            # expand categorical features in regressor sets
+            temp_powerset = []
+            for var_set in powerset_of_regressors:
+                for category, expressions in self.category_expressions.items():
+                    if category in var_set:
+                        var_set = (set(var_set) - {category}) | set(sorted(list(expressions)[1:])) # [1:] to drop first cat
+                    temp_powerset.append(var_set)
+            powerset_of_regressors = temp_powerset
+            
+            if y_var in self.category_expressions:
+                for y_var_cat in self.category_expressions[y_var]:
+                    self.testing_rounds.extend([TestingRound(y_label=y_var_cat, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
+            else:
+                self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
             
         self.testing_rounds = sorted(self.testing_rounds, key=lambda key: len(key.X_labels))
         self.is_finished = len(self.testing_rounds) == 0
             
     def get_current_test_parameters(self):
-        curr_testing_round = self.testing_rounds[0]
-        return curr_testing_round.y_label, curr_testing_round.X_labels, curr_testing_round.beta
+        return self.testing_rounds[0].get_test_parameters()
     
     def remove_current_test(self):
         self.testing_rounds.pop(0)
@@ -134,57 +166,154 @@ class TestingEngine:
         has_reached_max_iterations = self.testing_rounds[0].iterations >= self.max_iterations
         if has_converged or has_reached_max_iterations:
             self.finish_current_test()
+            
+    #def get_finished_categorical_tests(self, categorical_vars):
+    #    return [t for t in self.finished_rounds if t.y_label in categorical_vars]
         
 
 class Server:
     def __init__(self, clients, max_regressors=None):
         self.clients = clients
         self.available_data = set.union(*[set(c.data_labels) for c in self.clients.values()])
-        self.testing_engine = TestingEngine(self.available_data, max_regressors=max_regressors)
+        self.category_expressions = {}
+        for _, client in self.clients.items():
+            for feature, expressions in client.get_categories().items():
+                self.category_expressions[feature] = list(set(self.category_expressions.get(feature, [])).union(set(expressions)))
+        self.reversed_category_expressions = {vi:k for k,v in self.category_expressions.items() for vi in v}
+
+        self.testing_engine = TestingEngine(self.available_data, self.category_expressions, max_regressors=max_regressors)
         
     def run_tests(self):
         counter = 1
         while not self.testing_engine.is_finished:
             y_label, X_labels, beta = self.testing_engine.get_current_test_parameters()
-            selected_clients = {id_: c for id_, c in self.clients.items() if set([y_label] + X_labels).issubset(c.data_labels)}
+            
+            client_labels = [y_label] if y_label not in self.reversed_category_expressions else [self.reversed_category_expressions[y_label]]
+            client_labels += [x_label if x_label not in self.reversed_category_expressions else self.reversed_category_expressions[x_label] for x_label in X_labels]
+            
+            selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.data_labels)}
             if len(selected_clients) == 0:
+                print('WARNING! No client fulfills data requirements, removing current test...')
                 self.testing_engine.remove_current_test()
                 continue
             # http response, to compute glm results for y regressed on X with beta
-            results = {id:c.compute(y_label, X_labels, beta) for id_,c in selected_clients.items()}
+            results = {id_:c.compute(y_label, X_labels, beta) for id_,c in selected_clients.items()}
             self.testing_engine.aggregate_results(results)
             if counter % self.testing_engine.save_steps == 0:
                 counter = 0
                 #with open('./testengine.ckp', 'wb') as f:
                 #    pickle.dump(self.testing_engine, f)
             counter += 1
-                
+        #self.update_categorical_tests()
+            
+    # TO UPDATE LLF ON RESTRICTED DATASET. THIS APPEARS TO BE THE NORM FOR CALCULATING LLF OF BINOMIAL LOGREG ANYWAYS
+    # def update_categorical_tests(self):
+    #     for categorical_test in self.testing_engine.get_finished_categorical_tests(set(self.reversed_category_expressions.keys())):
+    #         y_label, X_labels, beta = categorical_test.get_test_parameters()
+    #         client_labels = [y_label] if y_label not in self.reversed_category_expressions else [self.reversed_category_expressions[y_label]]
+    #         client_labels += [x_label if x_label not in self.reversed_category_expressions else self.reversed_category_expressions[x_label] for x_label in X_labels]
+            
+    #         selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.data_labels)}
+            
+    #         results = {id_:c.compute_category_restricted(y_label, X_labels, beta) for id_,c in selected_clients.items()}
+    #         print('Updating', y_label, X_labels)
+    #         print('Old llf', categorical_test.llf)
+    #         categorical_test.update_state(results)
+    #         print('New llf', categorical_test.llf)
+ 
+# TODO: cat to binaries in order to perform ordinal regression               
+#def category_to_binaries(df, cols):
+#    for col in cols:
+#        n_unique = df[col].n_unique()
+#        for i in range(n_unique):
+#            
+#    return df
+
+import enum
+
+class VariableType(enum.Enum):
+    CONTINUOS = 0
+    CATEGORICAL = 1
+    ORDINAL = 2
     
 class Client:
     def __init__(self, data):
-        self.data_labels = sorted(data.columns)
-        self.data = data[self.data_labels]
+        self.data = data#.to_dummies(cs.string(), separator='__cat__', drop_first=True).cast(pl.Float64)
+        self.data_labels = sorted(self.data.columns)
+        self.schema = {}
+        for k,v in dict(self.data.schema).items():
+            if v == pl.Float64:
+                var_type = VariableType.CONTINUOS
+            elif v == pl.String:
+                var_type = VariableType.CATEGORICAL
+            elif v == pl.Int64:
+                var_type = VariableType.ORDINAL
+            else:
+                raise Exception('Unknown schema type encountered')
+            
+            self.schema[k] = var_type
         
-    def compute(self, y_label: str, X_labels: List[str], beta):
-        y = self.data[y_label]
-        X = self.data[X_labels]
+    def filter_categoricals(self, column, values):
+        if column not in self.schema or self.schema[column] != VariableType.CATEGORICAL:
+            return
+        self.data = self.data.filter(pl.col(column).is_in(values))
+    
+    def get_categories(self):
+        result = {}
+        for column, var_type in self.schema.items():
+            if var_type != VariableType.CATEGORICAL:
+                continue
+            result[column] = self.data[column].to_dummies(separator='__cat__').columns
+        return result
+    
+    # def compute_category_restricted(self, y_label, X_labels, beta):
+    #     _data = self.data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+    #     _data = _data.filter(pl.col(y_label) == 1)
+    #     return self._compute(_data, y_label, X_labels, beta)
         
-        X = X.to_numpy()
-        X = sm.tools.add_constant(X)
+    def compute(self, y_label: str, X_labels: List[str], beta):  
+        _data = self.data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+        return self._compute(_data, y_label, X_labels, beta)
+        
+    def _compute(self, data, y_label: str, X_labels: List[str], beta):
+        X = data.to_pandas()[X_labels]
+        X = X.to_numpy().astype(float)
+        X = sm.tools.add_constant(X) 
+        
+        y = data.to_pandas()[y_label]
+        y = y.to_numpy().astype(float)
+        
+        y_is_categorical = y_label in self.get_categories()
+        
+        result = self._run_regression(y,X,beta,y_is_categorical)
+        
+        
+        # if self.schema[y_label] == VariableType.CONTINUOS:
+        #     y = self.data[y_label]
+        #     y = y.to_pandas()
+        #     y = y.to_numpy().astype(float)
+            
+        #     result = self._run_regression(y,X,beta)
+            
+        # elif self.schema[y_label] == VariableType.CATEGORICAL:
+        #     y = self.data[y_label].sort().to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+        #     result = {}
+        #     for y_col in y.columns:
+        #         _y = y[y_col].to_pandas()
+        #         _y = _y.to_numpy().astype(float)
                 
-        eta, mu, dmu_deta, deviance, llf, rss = self._init_compute(y,X,beta)
+        #         _result = self._run_regression(_y,X,beta[y_col])
+
+        #         result[y_col] = _result
         
-        z = eta + (y - mu)/dmu_deta
-        W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
-        
-        r1 = X.T @ W @ X
-        r2 = X.T @ W @ z
-        
-        return r1, r2, deviance, llf, rss, len(y)
+        return result
         
         
-    def _init_compute(self, y, X, beta):
-        glm_model = sm.GLM(y, X, family=family.Gaussian())
+    def _run_regression(self, y, X, beta, categorical):
+        if categorical:
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+        else:
+            glm_model = sm.GLM(y, X, family=family.Gaussian())
         normalized_cov_params = np.linalg.inv(X.T.dot(X))
         glm_results = GLMResults(glm_model, beta, normalized_cov_params=normalized_cov_params, scale=None)
         
@@ -201,8 +330,15 @@ class Client:
         dmu_deta = derivative_inverse_link(eta)
         
         rss = sum(glm_results.resid_response**2)
+        llf = glm_results.llf
+        
+        z = eta + (y - mu)/dmu_deta
+        W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
+        
+        r1 = X.T @ W @ X
+        r2 = X.T @ W @ z
     
-        return eta, mu, dmu_deta, deviance, glm_results.llf, rss
+        return r1, r2, deviance, llf, rss, len(y)
     
     
     
