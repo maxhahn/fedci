@@ -90,6 +90,16 @@ class CategoricalNode(Node):
        quantiles = get_quantiles(self.num_categories, self.min_percent_per_category)
        return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Utf8)
    
+class OrdinalNode(Node):
+    def __init__(self, name, parents=[], min_categories=2, max_categories=4, min_percent_per_category=0.15):
+        super().__init__(name, parents)
+        
+        self.num_categories = np.random.randint(min_categories, max_categories+1)
+        self.min_percent_per_category = min_percent_per_category
+        
+    def _calc(self, num_samples):
+        quantiles = get_quantiles(self.num_categories, self.min_percent_per_category)
+        return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32)
    
 class NodeCollection():
     def __init__(self, nodes):

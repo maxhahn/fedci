@@ -113,7 +113,7 @@ class TestingRound:
         return self.get_relative_change_in_deviance() < self.convergence_threshold
     
 class TestingEngine:
-    def __init__(self, available_data, category_expressions, max_regressors=None, max_iterations=25, save_steps=10):
+    def __init__(self, available_data, category_expressions, ordinal_expressions, max_regressors=None, max_iterations=25, save_steps=10):
         self.available_data = available_data
         self.max_regressors = max_regressors
         self.max_iterations = max_iterations
@@ -123,6 +123,7 @@ class TestingEngine:
         self.testing_rounds = []
         
         self.category_expressions = category_expressions
+        self.ordinal_expressions = ordinal_expressions
         
        # _max_conditioning_set_size = min(len(self.available_data)-1, self.max_regressors) if self.max_regressors is not None else len(self.available_data)-1
         
@@ -135,15 +136,21 @@ class TestingEngine:
             # expand categorical features in regressor sets
             temp_powerset = []
             for var_set in powerset_of_regressors:
-                for category, expressions in self.category_expressions.items():
+                for category, expressions in category_expressions.items():
                     if category in var_set:
                         var_set = (set(var_set) - {category}) | set(sorted(list(expressions)[1:])) # [1:] to drop first cat
+                #for category, expressions in ordinal_expressions.items():
+                #    if category in var_set:
+                #        var_set = (set(var_set) - {category}) | set(sorted(list(expressions)[:-1])) # [1:] to drop first cat
                 temp_powerset.append(var_set)
             powerset_of_regressors = temp_powerset
             
-            if y_var in self.category_expressions:
-                for y_var_cat in self.category_expressions[y_var]:
+            if y_var in category_expressions:
+                for y_var_cat in category_expressions[y_var]:
                     self.testing_rounds.extend([TestingRound(y_label=y_var_cat, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
+            elif y_var in ordinal_expressions:
+                for y_var_ord in ordinal_expressions[y_var]:
+                    self.testing_rounds.extend([TestingRound(y_label=y_var_ord, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
             else:
                 self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
             
@@ -167,29 +174,42 @@ class TestingEngine:
         if has_converged or has_reached_max_iterations:
             self.finish_current_test()
             
-    #def get_finished_categorical_tests(self, categorical_vars):
-    #    return [t for t in self.finished_rounds if t.y_label in categorical_vars]
-        
 
 class Server:
     def __init__(self, clients, max_regressors=None):
         self.clients = clients
         self.available_data = set.union(*[set(c.data_labels) for c in self.clients.values()])
         self.category_expressions = {}
+        self.ordinal_expressions = {}
         for _, client in self.clients.items():
             for feature, expressions in client.get_categories().items():
                 self.category_expressions[feature] = sorted(list(set(self.category_expressions.get(feature, [])).union(set(expressions))))
+            for feature, expressions in client.get_ordinals().items():
+                self.ordinal_expressions[feature] = sorted(list(set(self.ordinal_expressions.get(feature, [])).union(set(expressions))))
         self.reversed_category_expressions = {vi:k for k,v in self.category_expressions.items() for vi in v}
+        self.reversed_ordinal_expressions = {vi:k for k,v in self.ordinal_expressions.items() for vi in v}
 
-        self.testing_engine = TestingEngine(self.available_data, self.category_expressions, max_regressors=max_regressors)
+        self.testing_engine = TestingEngine(self.available_data,
+                                            self.category_expressions,
+                                            self.ordinal_expressions,
+                                            max_regressors=max_regressors)
         
     def run_tests(self):
         counter = 1
         while not self.testing_engine.is_finished:
             y_label, X_labels, beta = self.testing_engine.get_current_test_parameters()
             
-            client_labels = [y_label] if y_label not in self.reversed_category_expressions else [self.reversed_category_expressions[y_label]]
-            client_labels += [x_label if x_label not in self.reversed_category_expressions else self.reversed_category_expressions[x_label] for x_label in X_labels]
+            client_labels = []
+            #print(y_label, X_labels)
+            for label in [y_label] + X_labels:
+                if label in self.reversed_category_expressions:
+                    client_labels.append(self.reversed_category_expressions[label])
+                elif label in self.reversed_ordinal_expressions:
+                    client_labels.append(self.reversed_ordinal_expressions[label])
+                else:
+                    client_labels.append(label)
+                    
+            #print(client_labels)
             
             selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.data_labels)}
             if len(selected_clients) == 0:
@@ -246,7 +266,7 @@ class Client:
                 var_type = VariableType.CONTINUOS
             elif v == pl.String:
                 var_type = VariableType.CATEGORICAL
-            elif v == pl.Int64:
+            elif v == pl.Int32:
                 var_type = VariableType.ORDINAL
             else:
                 raise Exception('Unknown schema type encountered')
@@ -265,6 +285,15 @@ class Client:
                 continue
             result[column] = self.data[column].to_dummies(separator='__cat__').columns
         return result
+
+    def get_ordinals(self):
+        result = {}
+        for column, var_type in self.schema.items():
+            if var_type != VariableType.ORDINAL:
+                continue
+            result[column] = [f"{column}__ord__{c}" for c in sorted(self.data[column].unique())]
+            #result[column] = sorted(self.data[column].unique())
+        return result
     
     # def compute_category_restricted(self, y_label, X_labels, beta):
     #     _data = self.data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
@@ -272,7 +301,14 @@ class Client:
     #     return self._compute(_data, y_label, X_labels, beta)
         
     def compute(self, y_label: str, X_labels: List[str], beta):  
-        _data = self.data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+        _data = self.data
+        _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+        if '__ord__' in y_label:
+            y_label, cutoff = y_label.split('__ord__')
+            _data = _data.with_columns(pl.when(pl.col(y_label) <= int(cutoff))
+                                    .then(pl.lit(1.0))
+                                    .otherwise(pl.lit(0.0))
+                                    .alias(y_label))
         return self._compute(_data, y_label, X_labels, beta)
         
     def _compute(self, data, y_label: str, X_labels: List[str], beta):
@@ -283,15 +319,15 @@ class Client:
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
         
-        y_is_categorical = y_label in self.get_categories()
+        do_log_reg = y_label in self.get_categories() or (y_label in self.schema and self.schema[y_label] == VariableType.ORDINAL)
         
-        result = self._run_regression(y,X,beta,y_is_categorical)
+        result = self._run_regression(y,X,beta,do_log_reg)
         
         return result
         
         
-    def _run_regression(self, y, X, beta, categorical):
-        if categorical:
+    def _run_regression(self, y, X, beta, do_log_reg):
+        if do_log_reg:
             glm_model = sm.GLM(y, X, family=family.Binomial())
         else:
             glm_model = sm.GLM(y, X, family=family.Gaussian())
