@@ -64,8 +64,8 @@ class Node:
     
     def reset(self):
         self.value = None
-        for p in self.parents:
-            p.reset()
+        #for p in self.parents:
+        #    p.reset()
         
     def _calc(self, num_samples):
         val = pl.Series(name=self.name, values=np.random.normal(0,1, num_samples))
@@ -100,6 +100,32 @@ class OrdinalNode(Node):
     def _calc(self, num_samples):
         quantiles = get_quantiles(self.num_categories, self.min_percent_per_category)
         return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32)
+
+class GenericNode(Node):
+    def __init__(self, name, parents=[], min_categories=2, max_categories=4, min_percent_per_category=0.15):
+        self.name = name
+        self.parents = parents
+        
+        self.node = random.choice([
+            Node(self.name, self.parents),
+            CategoricalNode(self.name, self.parents),
+            OrdinalNode(self.name, self.parents)
+        ])
+        
+        self.coefficients = self.node.coefficients
+        self.intercept = uniform_sample()
+        self.value = None
+        
+    def reset(self):
+        self.value = None
+        self.node = random.choice([
+            Node(self.name, self.parents),
+            CategoricalNode(self.name, self.parents),
+            OrdinalNode(self.name, self.parents)
+        ])
+        
+    def get(self, num_samples):
+        return self.node.get(num_samples)
    
 class NodeCollection():
     def __init__(self, nodes):
@@ -111,4 +137,6 @@ class NodeCollection():
         return data
     
     def reset(self):
-        self.nodes[-1].reset()
+        for node in self.nodes[::-1]:
+            node.reset()
+        #self.nodes[-1].reset()
