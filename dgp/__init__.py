@@ -102,15 +102,23 @@ class OrdinalNode(Node):
         return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32)
 
 class GenericNode(Node):
-    def __init__(self, name, parents=[], min_categories=2, max_categories=4, min_percent_per_category=0.15):
+    def __init__(self, name, parents=[], node_restrictions=None):
         self.name = name
         self.parents = parents
         
-        self.node = random.choice([
-            Node(self.name, self.parents),
-            CategoricalNode(self.name, self.parents),
-            OrdinalNode(self.name, self.parents)
-        ])
+        # TODO: add support for parameters of categorical and ordinal nodes
+        
+        
+        if node_restrictions is None:
+            node_choices = [
+                Node(self.name, self.parents),
+                CategoricalNode(self.name, self.parents),
+                OrdinalNode(self.name, self.parents)
+            ]
+        else:
+            node_choices = [n(self.name, self.parents) for n in node_restrictions]
+        
+        self.node = random.choice(node_choices)
         
         self.coefficients = self.node.coefficients
         self.intercept = uniform_sample()

@@ -37,9 +37,10 @@ class TestingRound:
     llf = None
     total_samples = None
     
-    def __init__(self, y_label, X_labels):
+    def __init__(self, y_label, X_labels, tikhonov_lambda=0):
         self.y_label = y_label
         self.X_labels = X_labels
+        self.tikhonov_lambda = tikhonov_lambda
         self._init_beta0()
         self.client_data = {
             'xtx': [],
@@ -102,7 +103,10 @@ class TestingRound:
         rss = self.client_data['rss']  
         nobs = self.client_data['nobs']
         
-        self.beta = np.linalg.inv(sum(xtx.values())) @ sum(xtz.values())
+        xtx_agg = sum(xtx.values())
+        xtx_agg = xtx_agg + self.tikhonov_lambda*np.eye(xtx_agg.shape[0]) # tikhonov/ridge regularization
+        
+        self.beta = np.linalg.inv(xtx_agg) @ sum(xtz.values())
         self.last_deviance = self.deviance
         self.deviance = sum(dev.values())
         self.llf = sum(llf.values())
@@ -113,11 +117,13 @@ class TestingRound:
         return self.get_relative_change_in_deviance() < self.convergence_threshold
     
 class TestingEngine:
-    def __init__(self, available_data, category_expressions, ordinal_expressions, max_regressors=None, max_iterations=25, save_steps=10):
+    def __init__(self, available_data, category_expressions, ordinal_expressions, tikhonov_lambda=0, max_regressors=None, max_iterations=25, save_steps=10):
         self.available_data = available_data
         self.max_regressors = max_regressors
         self.max_iterations = max_iterations
         self.save_steps = save_steps
+        
+        self.tikhonov_lambda = tikhonov_lambda
         
         self.finished_rounds = []
         self.testing_rounds = []
@@ -147,12 +153,12 @@ class TestingEngine:
             
             if y_var in category_expressions:
                 for y_var_cat in category_expressions[y_var]:
-                    self.testing_rounds.extend([TestingRound(y_label=y_var_cat, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
+                    self.testing_rounds.extend([TestingRound(y_label=y_var_cat, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             elif y_var in ordinal_expressions:
                 for y_var_ord in ordinal_expressions[y_var]:
-                    self.testing_rounds.extend([TestingRound(y_label=y_var_ord, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
+                    self.testing_rounds.extend([TestingRound(y_label=y_var_ord, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             else:
-                self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
+                self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             
         self.testing_rounds = sorted(self.testing_rounds, key=lambda key: len(key.X_labels))
         self.is_finished = len(self.testing_rounds) == 0
@@ -176,7 +182,7 @@ class TestingEngine:
             
 
 class Server:
-    def __init__(self, clients, max_regressors=None):
+    def __init__(self, clients, tikhonov_lambda=0, max_regressors=None):
         self.clients = clients
         self.available_data = set.union(*[set(c.data_labels) for c in self.clients.values()])
         self.category_expressions = {}
@@ -188,10 +194,13 @@ class Server:
                 self.ordinal_expressions[feature] = sorted(list(set(self.ordinal_expressions.get(feature, [])).union(set(expressions))))
         self.reversed_category_expressions = {vi:k for k,v in self.category_expressions.items() for vi in v}
         self.reversed_ordinal_expressions = {vi:k for k,v in self.ordinal_expressions.items() for vi in v}
+        
+        for client in self.clients.values(): client.receive_category_expressions(self.category_expressions)
 
         self.testing_engine = TestingEngine(self.available_data,
                                             self.category_expressions,
                                             self.ordinal_expressions,
+                                            tikhonov_lambda=tikhonov_lambda,
                                             max_regressors=max_regressors)
         
     def run_tests(self):
@@ -203,15 +212,14 @@ class Server:
             #print(y_label, X_labels)
             for label in [y_label] + X_labels:
                 if label in self.reversed_category_expressions:
-                    client_labels.append(self.reversed_category_expressions[label])
+                    #client_labels.append(self.reversed_category_expressions[label])
+                    client_labels.append(label)
                 elif label in self.reversed_ordinal_expressions:
                     client_labels.append(self.reversed_ordinal_expressions[label])
                 else:
-                    client_labels.append(label)
-                    
-            #print(client_labels)
+                    client_labels.append(label)                    
             
-            selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.data_labels)}
+            selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.extended_data_labels)}
             if len(selected_clients) == 0:
                 print('WARNING! No client fulfills data requirements, removing current test...')
                 self.testing_engine.remove_current_test()
@@ -260,6 +268,7 @@ class Client:
     def __init__(self, data):
         self.data = data#.to_dummies(cs.string(), separator='__cat__', drop_first=True).cast(pl.Float64)
         self.data_labels = sorted(self.data.columns)
+        self.extended_data_labels = sorted(self.data.to_dummies(cs.string(), separator='__cat__').columns)
         self.schema = {}
         for k,v in dict(self.data.schema).items():
             if v == pl.Float64:
@@ -272,6 +281,11 @@ class Client:
                 raise Exception('Unknown schema type encountered')
             
             self.schema[k] = var_type
+            
+        self.tikhonov_lambda = 1e-5
+            
+    def receive_category_expressions(self, expressions):
+        self.category_expressions = set([li for l in expressions.values() for li in l])
         
     def filter_categoricals(self, column, values):
         if column not in self.schema or self.schema[column] != VariableType.CATEGORICAL:
@@ -303,6 +317,9 @@ class Client:
     def compute(self, y_label: str, X_labels: List[str], beta):  
         _data = self.data
         _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+        missing_cols = list(self.category_expressions - set(_data.columns))
+        _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
+        # TODO: add missing columns for each missing category
         if '__ord__' in y_label:
             y_label, cutoff = y_label.split('__ord__')
             _data = _data.with_columns(pl.when(pl.col(y_label) <= int(cutoff))
@@ -312,6 +329,7 @@ class Client:
         return self._compute(_data, y_label, X_labels, beta)
         
     def _compute(self, data, y_label: str, X_labels: List[str], beta):
+        #print(y_label, X_labels)
         X = data.to_pandas()[X_labels]
         X = X.to_numpy().astype(float)
         X = sm.tools.add_constant(X) 
@@ -331,9 +349,12 @@ class Client:
             glm_model = sm.GLM(y, X, family=family.Binomial())
         else:
             glm_model = sm.GLM(y, X, family=family.Gaussian())
-        normalized_cov_params = np.linalg.inv(X.T.dot(X))
-        glm_results = GLMResults(glm_model, beta, normalized_cov_params=normalized_cov_params, scale=None)
+        #normalized_cov_params = np.linalg.inv(X.T.dot(X)) # singular matrix problem with missing cat_1 in data slices
+        glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
         
+        #print(beta)
+        #print(beta.shape)
+        #print(X.shape)
         eta = glm_results.predict(which='linear')
         
         # g' is inverse of link function
@@ -352,7 +373,10 @@ class Client:
         z = eta + (y - mu)/dmu_deta
         W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
         
+        # Tikhonov regularization
+        
         r1 = X.T @ W @ X
+        #r1 = r1 + self.tikhonov_lambda * np.eye(r1.shape[0])
         r2 = X.T @ W @ z
     
         return r1, r2, deviance, llf, rss, len(y)
