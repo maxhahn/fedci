@@ -1,6 +1,7 @@
 import polars as pl
 import polars.selectors as cs
 import numpy as np
+import math
 import pickle
 from typing import List
 from itertools import chain, combinations
@@ -77,6 +78,10 @@ class TestingRound:
     
     def get_test_parameters(self):
         return self.y_label, self.X_labels, self.beta
+    
+    def update_llf(self, results):
+        self.providing_clients = set(results.keys())
+        self.llf = sum(results.values())
     
     def update_state(self, results):
         self.providing_clients = set(results.keys())
@@ -155,14 +160,18 @@ class TestingEngine:
                 for y_var_cat in category_expressions[y_var]:
                     self.testing_rounds.extend([TestingRound(y_label=y_var_cat, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             elif y_var in ordinal_expressions:
-                for y_var_ord in ordinal_expressions[y_var]:
+                for y_var_ord in ordinal_expressions[y_var][:-1]: # skip last category of ordinal regression
                     self.testing_rounds.extend([TestingRound(y_label=y_var_ord, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             else:
                 self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             
         self.testing_rounds = sorted(self.testing_rounds, key=lambda key: len(key.X_labels))
         self.is_finished = len(self.testing_rounds) == 0
-            
+        
+    def get_finished_tests_by_y_label(self, y_labels):
+        res = [t for t in self.finished_rounds if t.y_label in y_labels]
+        return res
+        
     def get_current_test_parameters(self):
         return self.testing_rounds[0].get_test_parameters()
     
@@ -232,22 +241,66 @@ class Server:
                 #with open('./testengine.ckp', 'wb') as f:
                 #    pickle.dump(self.testing_engine, f)
             counter += 1
-        #self.update_categorical_tests()
             
-    # TO UPDATE LLF ON RESTRICTED DATASET. THIS APPEARS TO BE THE NORM FOR CALCULATING LLF OF BINOMIAL LOGREG ANYWAYS
-    # def update_categorical_tests(self):
-    #     for categorical_test in self.testing_engine.get_finished_categorical_tests(set(self.reversed_category_expressions.keys())):
-    #         y_label, X_labels, beta = categorical_test.get_test_parameters()
-    #         client_labels = [y_label] if y_label not in self.reversed_category_expressions else [self.reversed_category_expressions[y_label]]
-    #         client_labels += [x_label if x_label not in self.reversed_category_expressions else self.reversed_category_expressions[x_label] for x_label in X_labels]
+        # fix ordinal llfs
+        self.update_ordinal_tests()
             
-    #         selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.data_labels)}
+    def update_ordinal_tests(self):
+        def _get_llfs(t0, t1):
+            if t1 is None:
+                t1_y = None
+                t1_b = None
+                required_labels = [t0.y_label] + t0.X_labels
+            else:
+                t1_y = t1.y_label
+                t1_b = t1.beta
+                required_labels = [t1.y_label] + t1.X_labels
             
-    #         results = {id_:c.compute_category_restricted(y_label, X_labels, beta) for id_,c in selected_clients.items()}
-    #         print('Updating', y_label, X_labels)
-    #         print('Old llf', categorical_test.llf)
-    #         categorical_test.update_state(results)
-    #         print('New llf', categorical_test.llf)
+            client_labels = []            
+            for label in required_labels:
+                if label in self.reversed_category_expressions:
+                    #client_labels.append(self.reversed_category_expressions[label])
+                    client_labels.append(label)
+                elif label in self.reversed_ordinal_expressions:
+                    client_labels.append(self.reversed_ordinal_expressions[label])
+                else:
+                    client_labels.append(label)                    
+            selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.extended_data_labels)}
+            
+            assert len(selected_clients) > 0
+            
+            results = {id_:c.compute_ordinal_llf(t0.X_labels,
+                                                t0.y_label,
+                                                t1_y,
+                                                t0.beta,
+                                                t1_b
+                                                ) for id_,c in selected_clients.items()}
+            return results
+        
+        for ordinal_key, ordinal_values in self.ordinal_expressions.items():
+            all_ordinal_tests = self.testing_engine.get_finished_tests_by_y_label(ordinal_values)
+            ordinal_test_x_label_mapping = {}
+            for t in all_ordinal_tests:
+                x_label_key = tuple(sorted(list(t.X_labels)))
+                if x_label_key not in ordinal_test_x_label_mapping:
+                    ordinal_test_x_label_mapping[x_label_key] = []
+                ordinal_test_x_label_mapping[x_label_key].append(t)
+                
+            for x_label_key, ordinal_tests in ordinal_test_x_label_mapping.items():
+                
+                ordinal_tests = sorted(ordinal_tests, key=lambda x: int(x.y_label.split('__ord__')[-1]))
+                #print('LLFs Before', [t.llf for t in ordinal_tests])
+                for i in range(1,len(ordinal_tests)):    
+                    results = _get_llfs(ordinal_tests[i-1], ordinal_tests[i])
+                    
+                    #print(results)
+                    #print('Updating', y_label, X_labels)
+                    #print('Old llf', ordinal_tests[i].llf)
+                    ordinal_tests[i].update_llf(results)
+                    #print('New llf', ordinal_tests[i].llf)
+                results = _get_llfs(ordinal_tests[-1], None)
+                ordinal_tests[-1].update_llf(results)
+                #print('LLFs After', [t.llf for t in ordinal_tests])
  
 # TODO: cat to binaries in order to perform ordinal regression               
 #def category_to_binaries(df, cols):
@@ -309,6 +362,63 @@ class Client:
             #result[column] = sorted(self.data[column].unique())
         return result
     
+    def compute_ordinal_llf(self, X_labels, y_label0, y_label1, beta0, beta1):
+        
+        def _get_probas(y_label: str, X_labels: List[str], beta):
+            _data = self.data
+            _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+            missing_cols = list(self.category_expressions - set(_data.columns))
+            _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
+            if '__ord__' in y_label:
+                y_label, cutoff = y_label.split('__ord__')
+                _data = _data.with_columns(pl.when(pl.col(y_label) <= int(cutoff))
+                                        .then(pl.lit(1.0))
+                                        .otherwise(pl.lit(0.0))
+                                        .alias(y_label))
+            X = _data.to_pandas()[X_labels]
+            X = X.to_numpy().astype(float)
+            X = sm.tools.add_constant(X) 
+            
+            y = _data.to_pandas()[y_label]
+            y = y.to_numpy().astype(float)
+            
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
+            proba = glm_results.predict()
+            
+            proba = np.abs(np.abs((1-y)) - proba)
+            
+            return proba, glm_results.llf
+        
+        probas0, llf0 = _get_probas(y_label0, X_labels, beta0)
+        if y_label1 is None or beta1 is None:
+            probas1, llf1 = np.ones(probas0.shape), None
+        else:
+            probas1, llf1 = _get_probas(y_label1, X_labels, beta1)
+            
+        y_label, cat = y_label0.split('__ord__')
+            
+        _data = self.data
+        cat_association = _data.select(pl.when(pl.col(y_label) == int(cat))
+                                .then(pl.lit(1.0))
+                                .otherwise(pl.lit(0.0))
+                                .alias(y_label)).to_pandas()[y_label].to_numpy().astype(float)
+        cat_association = np.where(cat_association == 1)[0]
+            
+        #print(f'P(Y <= {y_label1}) - P(Y <= {y_label0}), conditioned on {X_labels}')
+        #print(f'llf0 - should be {llf0}, is {np.sum(np.log(probas0))}')
+        #print(f'llf1 - should be {llf1}, is {np.sum(np.log(probas1))}')
+        
+        probas = probas1 - probas0
+        #np.log(np.mul(probas))
+        llf = np.sum(np.log(np.take(probas, cat_association)))
+        
+        #print(probas, llf)
+        
+        #print(probas, llf)
+        
+        return llf
+    
     # def compute_category_restricted(self, y_label, X_labels, beta):
     #     _data = self.data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
     #     _data = _data.filter(pl.col(y_label) == 1)
@@ -319,7 +429,6 @@ class Client:
         _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
         missing_cols = list(self.category_expressions - set(_data.columns))
         _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
-        # TODO: add missing columns for each missing category
         if '__ord__' in y_label:
             y_label, cutoff = y_label.split('__ord__')
             _data = _data.with_columns(pl.when(pl.col(y_label) <= int(cutoff))

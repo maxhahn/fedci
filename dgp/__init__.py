@@ -110,15 +110,15 @@ class GenericNode(Node):
         
         
         if node_restrictions is None:
-            node_choices = [
+            self.node_choices = [
                 Node(self.name, self.parents),
                 CategoricalNode(self.name, self.parents),
                 OrdinalNode(self.name, self.parents)
             ]
         else:
-            node_choices = [n(self.name, self.parents) for n in node_restrictions]
+            self.node_choices = [n(self.name, self.parents) for n in node_restrictions]
         
-        self.node = random.choice(node_choices)
+        self.node = random.choice(self.node_choices)
         
         self.coefficients = self.node.coefficients
         self.intercept = uniform_sample()
@@ -126,17 +126,14 @@ class GenericNode(Node):
         
     def reset(self):
         self.value = None
-        self.node = random.choice([
-            Node(self.name, self.parents),
-            CategoricalNode(self.name, self.parents),
-            OrdinalNode(self.name, self.parents)
-        ])
+        self.node = random.choice(self.node_choices)
         
     def get(self, num_samples):
         return self.node.get(num_samples)
    
 class NodeCollection():
-    def __init__(self, nodes):
+    def __init__(self, name, nodes):
+        self.name = name
         self.nodes = toposort(nodes)
         
     def get(self, num_samples):
