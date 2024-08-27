@@ -242,8 +242,56 @@ class Server:
                 #    pickle.dump(self.testing_engine, f)
             counter += 1
             
+        # fix categorical tests
+        self.update_categorical_tests()
         # fix ordinal llfs
         self.update_ordinal_tests()
+        
+    def update_categorical_tests(self):
+        def _get_llfs(t0, t_ref):            
+            client_labels = []            
+            for label in [t0.y_label] + t0.X_labels:
+                if label in self.reversed_category_expressions:
+                    #client_labels.append(self.reversed_category_expressions[label])
+                    client_labels.append(label)
+                elif label in self.reversed_ordinal_expressions:
+                    client_labels.append(self.reversed_ordinal_expressions[label])
+                else:
+                    client_labels.append(label)                    
+            selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.extended_data_labels)}
+            
+            assert len(selected_clients) > 0
+            
+            results = {id_:c.compute_categorical_llf(t0.X_labels,
+                                                t0.y_label,
+                                                t_ref.y_label,
+                                                t0.beta,
+                                                t_ref.beta
+                                                ) for id_,c in selected_clients.items()}
+            return results
+        
+        for categorical_key, categorical_values in self.category_expressions.items():
+            all_categorical_tests = self.testing_engine.get_finished_tests_by_y_label(categorical_values)
+            categorical_test_x_label_mapping = {}
+            for t in all_categorical_tests:
+                x_label_key = tuple(sorted(list(t.X_labels)))
+                if x_label_key not in categorical_test_x_label_mapping:
+                    categorical_test_x_label_mapping[x_label_key] = []
+                categorical_test_x_label_mapping[x_label_key].append(t)
+                
+            for x_label_key, categorical_tests in categorical_test_x_label_mapping.items():
+                #print('LLFs Before', [t.llf for t in categorical_tests])
+                for i in range(len(categorical_tests)-1):    
+                    results = _get_llfs(categorical_tests[i], categorical_tests[-1])
+                    
+                    #print(results)
+                    #print('Updating', y_label, X_labels)
+                    #print('Old llf', categorical_tests[i].llf)
+                    categorical_tests[i].update_llf(results)
+                    #print('New llf', categorical_tests[i].llf)
+                #results = _get_llfs(categorical_tests[-1], None)
+                #categorical_tests[-1].update_llf(results)
+                #print('LLFs After', [t.llf for t in categorical_tests])
             
     def update_ordinal_tests(self):
         def _get_llfs(t0, t1):
@@ -362,19 +410,88 @@ class Client:
             #result[column] = sorted(self.data[column].unique())
         return result
     
-    def compute_ordinal_llf(self, X_labels, y_label0, y_label1, beta0, beta1):
+    def compute_categorical_llf(self, X_labels, y_label, y_label_ref_cat, beta, beta_ref_cat):
+        def _get_probas(y_label: str, X_labels: List[str], beta):
+            _data = self.data
+            y_label, cat = y_label.split("__cat__")
+            _data = _data.with_columns(pl.when(pl.col(y_label) == cat)
+                                       .then(pl.lit(1.0))
+                                       .otherwise(pl.lit(0.0))
+                                       .alias(y_label))
+            _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+            missing_cols = list(self.category_expressions - set(_data.columns))
+            _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
+  
+            X = _data.to_pandas()[X_labels]
+            X = X.to_numpy().astype(float)
+            X = sm.tools.add_constant(X) 
+            
+            y = _data.to_pandas()[y_label]
+            y = y.to_numpy().astype(float)
+            
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
+            proba = glm_results.predict()
+            
+            proba = np.abs(np.abs((1-y)) - proba)
+            
+            return proba
+            
+        def _get_eta(y_label: str, X_labels: List[str], beta):
+            _data = self.data
+            y_label, cat = y_label.split("__cat__")
+            _data = _data.with_columns(pl.when(pl.col(y_label) == cat)
+                                       .then(pl.lit(1.0))
+                                       .otherwise(pl.lit(0.0))
+                                       .alias(y_label))
+            _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+            missing_cols = list(self.category_expressions - set(_data.columns))
+            _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
+  
+            X = _data.to_pandas()[X_labels]
+            X = X.to_numpy().astype(float)
+            X = sm.tools.add_constant(X) 
+            
+            y = _data.to_pandas()[y_label]
+            y = y.to_numpy().astype(float)
+            
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
+            eta = glm_results.predict(which='linear')
+            
+            return eta
         
+        probas = _get_probas(y_label_ref_cat, X_labels, beta_ref_cat)
+        eta = _get_eta(y_label, X_labels, beta)
+
+        probas = probas * np.exp(eta)
+        
+        y_label, cat = y_label.split("__cat__")
+        _data = self.data
+        cat_association = _data.select(pl.when(pl.col(y_label) == cat)
+                                .then(pl.lit(1.0))
+                                .otherwise(pl.lit(0.0))
+                                .alias(y_label))[y_label].to_numpy().astype(float)
+        cat_association = np.where(cat_association == 1)[0]
+        
+        #probas = probas1 - probas0
+        llf = np.sum(np.log(np.take(probas, cat_association)))
+        
+        return llf
+    
+    def compute_ordinal_llf(self, X_labels, y_label0, y_label1, beta0, beta1):
         def _get_probas(y_label: str, X_labels: List[str], beta):
             _data = self.data
             _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
             missing_cols = list(self.category_expressions - set(_data.columns))
             _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
-            if '__ord__' in y_label:
-                y_label, cutoff = y_label.split('__ord__')
-                _data = _data.with_columns(pl.when(pl.col(y_label) <= int(cutoff))
-                                        .then(pl.lit(1.0))
-                                        .otherwise(pl.lit(0.0))
-                                        .alias(y_label))
+
+            y_label, cutoff = y_label.split('__ord__')
+            _data = _data.with_columns(pl.when(pl.col(y_label) <= int(cutoff))
+                                    .then(pl.lit(1.0))
+                                    .otherwise(pl.lit(0.0))
+                                    .alias(y_label))
+                
             X = _data.to_pandas()[X_labels]
             X = X.to_numpy().astype(float)
             X = sm.tools.add_constant(X) 
@@ -404,18 +521,9 @@ class Client:
                                 .otherwise(pl.lit(0.0))
                                 .alias(y_label)).to_pandas()[y_label].to_numpy().astype(float)
         cat_association = np.where(cat_association == 1)[0]
-            
-        #print(f'P(Y <= {y_label1}) - P(Y <= {y_label0}), conditioned on {X_labels}')
-        #print(f'llf0 - should be {llf0}, is {np.sum(np.log(probas0))}')
-        #print(f'llf1 - should be {llf1}, is {np.sum(np.log(probas1))}')
         
         probas = probas1 - probas0
-        #np.log(np.mul(probas))
         llf = np.sum(np.log(np.take(probas, cat_association)))
-        
-        #print(probas, llf)
-        
-        #print(probas, llf)
         
         return llf
     
