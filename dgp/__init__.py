@@ -50,10 +50,10 @@ def toposort(variables):
 
 
 class Node:
-    def __init__(self, name, parents=[]):
+    def __init__(self, name, parents=[], **kwargs):
         self.name = name
-        self.parents = parents
-        self.coefficients = [uniform_sample() for _ in parents]
+        self.parents = parents.copy()
+        self.coefficients = [uniform_sample() for _ in self.parents]
         self.intercept = uniform_sample()
         self.value = None
         
@@ -63,16 +63,18 @@ class Node:
         return self.value
     
     def reset(self):
+        self.coefficients = [uniform_sample() for _ in self.parents]
+        self.intercept = uniform_sample()
         self.value = None
         #for p in self.parents:
-        #    p.reset()
+        #    p.()
         
     def _calc(self, num_samples):
         val = pl.Series(name=self.name, values=np.random.normal(0,1, num_samples))
         if len(self.parents) > 0:
             val += self.intercept 
-        for parent, coeff in zip(self.parents, self.coefficients):
-            val += parent.get(num_samples).cast(pl.Float64)*coeff
+            for parent, coeff in zip(self.parents, self.coefficients):
+                val += parent.get(num_samples).cast(pl.Float64)*coeff
             
         return val
     
@@ -102,9 +104,11 @@ class OrdinalNode(Node):
         return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32)
 
 class GenericNode(Node):
-    def __init__(self, name, parents=[], node_restrictions=None):
+    def __init__(self, name, parents=[], node_restrictions=None, **kwargs):
         self.name = name
-        self.parents = parents
+        self.parents = parents.copy()
+        
+        self.kwargs = kwargs
         
         # TODO: add support for parameters of categorical and ordinal nodes
         
@@ -116,16 +120,15 @@ class GenericNode(Node):
                 OrdinalNode(self.name, self.parents)
             ]
         else:
-            self.node_choices = [n(self.name, self.parents) for n in node_restrictions]
+            self.node_choices = [n(self.name, self.parents, **self.kwargs) for n in node_restrictions]
         
         self.node = random.choice(self.node_choices)
         
         self.coefficients = self.node.coefficients
         self.intercept = uniform_sample()
-        self.value = None
         
     def reset(self):
-        self.value = None
+        self.node.reset()
         self.node = random.choice(self.node_choices)
         
     def get(self, num_samples):

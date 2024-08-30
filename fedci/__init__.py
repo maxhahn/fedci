@@ -523,7 +523,9 @@ class Client:
         cat_association = np.where(cat_association == 1)[0]
         
         probas = probas1 - probas0
-        llf = np.sum(np.log(np.take(probas, cat_association)))
+        probas = np.take(probas, cat_association)
+        #probas = np.clip(probas, a_min=1e-10, a_max=None)
+        llf = np.sum(np.log(probas))
         
         return llf
     
@@ -548,8 +550,14 @@ class Client:
     def _compute(self, data, y_label: str, X_labels: List[str], beta):
         #print(y_label, X_labels)
         X = data.to_pandas()[X_labels]
+        X['__const'] = 1
         X = X.to_numpy().astype(float)
-        X = sm.tools.add_constant(X) 
+        #X = sm.tools.add_constant(X) 
+        
+        #print(len(self.data))
+        #print(y_label, X_labels)
+        #print(data.head(1))
+        #print(X)
         
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
@@ -673,9 +681,9 @@ class SymmetricLikelihoodRatioTest:
         #print(lrt0.s_labels, lrt1.s_labels)
         assert lrt0.s_labels.sort() == lrt1.s_labels.sort()
         
-        self.label1 = lrt0.y_label
-        self.label2 = lrt1.y_label
-        self.conditioning_set = lrt0.s_labels
+        self.y_label = lrt0.y_label
+        self.x_label = lrt1.y_label
+        self.s_labels = lrt0.s_labels
         
         self.lrt0: LikelihoodRatioTest = lrt0
         self.lrt1: LikelihoodRatioTest = lrt1
@@ -684,7 +692,7 @@ class SymmetricLikelihoodRatioTest:
         
     def __repr__(self):
         #return f"SymmetricLikelihoodRatioTest - v0: {self.label1}, v1: {self.label2}, conditioning set: {self.conditioning_set}"
-        return f"SymmetricLikelihoodRatioTest - v0: {self.label1}, v1: {self.label2}, conditioning set: {self.conditioning_set}, p: {self.p_val}\n\t-{self.lrt0}\n\t-{self.lrt1}"
+        return f"SymmetricLikelihoodRatioTest - v0: {self.y_label}, v1: {self.x_label}, conditioning set: {self.s_labels}, p: {self.p_val}\n\t-{self.lrt0}\n\t-{self.lrt1}"
     
     
 # Helper Functions
@@ -706,9 +714,12 @@ def get_likelihood_tests(finished_rounds):
     
     return tests
 
-def get_symmetric_likelihood_tests(finished_rounds):
+def get_symmetric_likelihood_tests(finished_rounds, from_asymmetric_tests=True):
     tests = []
-    asymmetric_tests = get_likelihood_tests(finished_rounds)
+    if from_asymmetric_tests:
+        asymmetric_tests = finished_rounds
+    else:
+        asymmetric_tests = get_likelihood_tests(finished_rounds)
     
     unique_tests = [t for t in asymmetric_tests if t.y_label < t.x_label]
 
