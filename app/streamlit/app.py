@@ -16,6 +16,14 @@ import zipfile
 import io
 
 
+import sys
+import os
+# Add the parent directory to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import fedci
+import polars as pl
+
+
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
 
@@ -80,6 +88,11 @@ if 'server_has_received_data' not in st.session_state:
 if 'do_autorefresh' not in st.session_state:
     st.session_state['do_autorefresh'] = True  
     
+if 'fedglm_client' not in st.session_state:
+    st.session_state['fedglm_client'] = None
+if 'selected_algorithm' not in st.session_state:
+    st.session_state['selected_algorithm'] = None  
+    
 # Always update
 st.session_state['existing_raw_data'] = os.listdir(upload_dir)
     
@@ -137,10 +150,11 @@ def step_check_in_to_server():
     if st.session_state['server_provided_user_id'] is not None:
         st.info('Server check-in completed')
         
-    st.write('Please enter the server URL:')
     col1, col2 = st.columns((6,1))
+    col1.write('Please enter the server URL:')
     server_url = col1.text_input('Please chose your username', placeholder=st.session_state['server_url'], label_visibility='collapsed')
     
+    col2.write('Connect!')
     if col2.button(':link:', help='Connect to URL', use_container_width=True) and server_url is not None and server_url != '':
         if st.session_state['username'] is not None:
             st.warning('''You are already checked in with a server.  
@@ -153,19 +167,38 @@ def step_check_in_to_server():
             st.rerun()
             return
         
-    st.write('Please enter a username:')
-    col1, col2 = st.columns((6,1))
+    st.write('---')
+    col1, col2, col3 = st.columns((4,2,1))
+    col1.write('Please enter a username:')
     username = col1.text_input('Please chose your username', placeholder=st.session_state['username'], label_visibility='collapsed')
     
+    col2.write('Select algorithm')
+    # TODO: ensure selected algorithm is default select
+    algo_type = col2.selectbox('Select algorithm', ['IOD', 'FEDGLM'], label_visibility='collapsed')
+    
+    col3.write('Submit!')
     if st.session_state['server_provided_user_id'] is None:
-        button = col2.button(':arrow_heading_up:', help='Submit check-in request', use_container_width=True)
+        button = col3.button(':arrow_heading_up:', help='Submit check-in request', use_container_width=True)
         request_url = f'{st.session_state["server_url"]}/check-in'
-        request_params = {'username': username}
+        
+        # TODO: Warning: check in transmits category and ordinal expressions as well as data labels
+        fedglm_client = st.session_state['fedglm_client']
+        categorical_expressions = fedglm_client.get_categories()
+        ordinal_expressions = fedglm_client.get_ordinals() 
+        
+        request_params = {
+            'username': username,
+            'algorithm': algo_type,
+            'data_labels': st.session_state['result_labels'],
+            'categorical_expressions': categorical_expressions,
+            'ordinal_expressions': ordinal_expressions
+            }
     else:
-        button = col2.button(':arrow_heading_up:', help='Change name', disabled=not username, use_container_width=True)
-        request_url = f'{st.session_state["server_url"]}/change-name'
+        button = col3.button(':arrow_heading_up:', help='Update user', use_container_width=True)
+        request_url = f'{st.session_state["server_url"]}/update-user'
         request_params = {
             'id': st.session_state['server_provided_user_id'],
+            'algorithm': algo_type,
             'username': st.session_state['username'],
             'new_username': username
             }
@@ -181,6 +214,7 @@ def step_check_in_to_server():
         r = r.json()
         st.session_state['server_provided_user_id'] = r['id']
         st.session_state['username'] = r['username']
+        st.session_state['selected_algorithm'] = r['algorithm']
         st.rerun()
     return
 
@@ -192,7 +226,7 @@ def step_check_in_to_server():
 #                                                `--'    
 
 def step_upload_data():
-    uploaded_file = st.file_uploader('Data Upload', type='csv')
+    uploaded_file = st.file_uploader('Data Upload', type=['csv', 'parquet'])
     
     no_files_uploaded_yet = len(st.session_state['existing_raw_data']) == 0
     st.write('Select previously uploaded data:')
@@ -215,17 +249,25 @@ def step_upload_data():
     # read uploaded file into session state
     if uploaded_file is not None:
         filename = uploaded_file.name
-        df = pd.read_csv(uploaded_file)
-        df.to_csv(f'{upload_dir}/{filename}', index=False)
+        if filename.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+            filename = filename[:-4] + '.parquet'
+        elif filename.endswith('.parquet'):
+            df = pd.read_parquet(uploaded_file)
+        else:
+            raise Exception('Cannot handle files of the given type')
+        df.to_parquet(f'{upload_dir}/{filename}', index=False)
     elif previously_uploaded_file is not None:
         filename = previously_uploaded_file
-        df = pd.read_csv(f'{upload_dir}/{previously_uploaded_file}')
+        df = pd.read_parquet(f'{upload_dir}/{previously_uploaded_file}')
         
     st.session_state['uploaded_data'] = df
     st.session_state['uploaded_data_filename'] = filename
     # Reset when new file is uploaded
     st.session_state['result_labels'] = list(df.columns)
     st.session_state['result_pvals'] = None
+    
+    st.session_state['fedglm_client'] = fedci.Client(pl.from_pandas(df))
 
     if st.session_state['uploaded_data'] is not None:
         with st.expander('View Data'):
@@ -323,7 +365,8 @@ def step_process_data():
         r = post_to_server(url = f'{st.session_state["server_url"]}/submit-data', payload={'id': st.session_state['server_provided_user_id'],
                                                                     'username': st.session_state['username'],
                                                                     'data': base64_df,
-                                                                    'data_labels': labels})
+                                                                    'data_labels': labels
+                                                                    })
         if r is None:
             return
         if r.status_code != 200:
@@ -400,7 +443,7 @@ def step_process_data():
 # `--' '--' `---'  `---' `--`--`--'    `-----' `---'  `---'  `---'.-'  /    
 #                                                                 `---'   
 
-@st.experimental_dialog("Secure your room!")
+@st.dialog("Secure your room!")
 def room_creation_password_dialog(room_name):
     st.session_state['do_autorefresh'] = False
     st.write(f'### Creating room {room_name}...')
@@ -416,6 +459,7 @@ def room_creation_password_dialog(room_name):
         r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/create', payload={'id': st.session_state['server_provided_user_id'],
                                                                 'username': st.session_state['username'],
                                                                 'room_name': room_name,
+                                                                'algorithm': st.session_state['selected_algorithm'],
                                                                 'password': password})
 
         if r is None:
@@ -428,7 +472,7 @@ def room_creation_password_dialog(room_name):
         st.error('An error occured trying to create the room')
     return
 
-@st.experimental_dialog("This room is secured!")
+@st.dialog("This room is secured!")
 def room_join_password_dialog(room_name):
     st.session_state['do_autorefresh'] = False
     st.write(f'### Joining room {room_name}...')
@@ -535,6 +579,8 @@ def step_show_room_details():
         st.session_state['do_autorefresh'] = False
     else:
         st.write(f"## Room: {st.session_state['current_room']['name']} <sup>({'hidden' if room['is_hidden'] else 'public'}) ({'locked' if room['is_locked'] else 'open'}) {'(protected)' if room['is_protected'] else ''}</sup>", unsafe_allow_html=True)
+    
+    st.write(f"<sup>Room protocol: {st.session_state['current_room']['algorithm']}<sup>", unsafe_allow_html=True)
     
     _, col1, col2, col3, col4, col5, _ = st.columns((1,1,1,1,1,1,1))
         
@@ -739,7 +785,7 @@ def main():
     col2.write('<sup>View our GitHub [here](https://www.google.com)</sup>', unsafe_allow_html=True)
     
     if check_server_connection():
-        st.info('Server connection established' + ('' if st.session_state['username'] is None else f" - checked in as: {st.session_state['username']}"))
+        st.info('Server connection established' + ('' if st.session_state['username'] is None else f" - checked in as: {st.session_state['username']} ({st.session_state['selected_algorithm']})"))
   
     refresh_failure = False
     # refresh current room
@@ -756,30 +802,36 @@ def main():
         except:
             refresh_failure = True
         
-    step = stx.stepper_bar(steps=["Server Check-In", "Upload Data", "Process Data", "Join Room", "View Result"], lock_sequence=False)
+    step = stx.stepper_bar(steps=["Upload Data", "Server Check-In", "Process Data", "Join Room", "View Result"], lock_sequence=False)
     
     if refresh_failure:
         st.error('An error occured trying to update current room data')
         return
     
-    if step > 0 and st.session_state['is_connected_to_server'] == False:
+    if step > 1 and st.session_state['is_connected_to_server'] == False:
         st.warning('Please ensure you have a connection to the server before continuing')
         return
 
     if step == 0:
-        step_check_in_to_server()
-    elif step == 1:
-        if st.session_state['username'] is None:
-            st.info("Please check in with the server before continuing")
-            return
         step_upload_data()
-    elif step == 2:
+    elif step == 1:
         if st.session_state['uploaded_data'] is None:
             st.info("Please upload a file before continuing")
             return
+        step_check_in_to_server()
+    elif step == 2:
+        if st.session_state['username'] is None:
+           st.info("Please check in with the server before continuing")
+           return
+        if st.session_state['selected_algorithm'] != 'IOD':
+            st.info("""
+                    This step is only required for IOD.  
+                    Please continue to the next step.
+                    """)
+            return
         step_process_data()
     elif step == 3:
-        if st.session_state['server_has_received_data'] is False:
+        if st.session_state['selected_algorithm'] == 'IOD' and st.session_state['server_has_received_data'] is False:
             st.info("Please send your data to the server before continuing")
             return
         if st.session_state['current_room'] is None:

@@ -35,17 +35,21 @@ import fedci
 # |  `---.|  ||  |  |  |  |  |  |  |  |  |\   --..-'  `) 
 # `------'`--''--'  `--'  `--'  `--'  `--' `----'`----'  
 
+
+class Algorithm(str, Enum):
+    P_VALUE_AGGREGATION = 'IOD'
+    FEDERATED_GLM = 'FEDGLM'
+    
 @dataclass
 class Connection:
     id: str
     username: str
     last_request_time: datetime.datetime
+    algorithm: Algorithm
+    data_labels: List[str]
+    categorical_expressions: Dict[str, List[str]]
+    ordinal_expressions: Dict[str, List[str]]
     data: Optional[pd.DataFrame]=None
-    data_labels: Optional[List[str]]=None
-    
-class RoomType(str, Enum):
-    P_VALUE_AGGREGATION = 'p_value_aggregation'
-    FEDERATED_GLM = 'federated_glm'
     
 @dataclass
 class FederatedGLMData:
@@ -56,13 +60,15 @@ class FederatedGLMData:
 @dataclass
 class FederatedGLMTesting:
     testing_engine: fedci.TestingEngine
+    categorical_expressions: Dict[str, List[str]]
+    ordinal_expressions: Dict[str, List[str]]
     pending_data: Dict[str, FederatedGLMData]
     start_of_last_iteration: datetime.datetime
     
 @dataclass
 class Room:
     name: str
-    room_type: RoomType
+    algorithm: Algorithm
     owner_name: str
     password: str
     is_locked: bool
@@ -88,13 +94,13 @@ class Room:
 class UserDTO:
     id: str
     username: str
-    submitted_data: bool
+    algorithm: str
     data_labels: Optional[List[str]]
     def __init__(self, conn: Connection):
         self.id = conn.id
         self.username = conn.username
-        self.submitted_data = conn.data is not None
-        self.data_labels = conn.data_labels if self.submitted_data else None
+        self.algorithm = conn.algorithm.value
+        self.data_labels = conn.data_labels
         
 @dataclass
 class FederatedGLMStatus:
@@ -110,7 +116,7 @@ class FederatedGLMStatus:
         testing_round: fedci.TestingRound = glm_testing_state.testing_engine.testing_rounds[0] # todo: might cause errors
         self.y_label = testing_round.y_label
         self.X_labels = testing_round.X_labels
-        self.is_awaiting_response = requesting_user is not None and glm_testing_state.pending_data.get(requesting_user) is not None
+        self.is_awaiting_response = requesting_user is not None and glm_testing_state.pending_data.get(requesting_user) is None
         self.current_beta = testing_round.beta
         self.current_iteration = testing_round.iterations
         self.current_relative_change_in_deviance = testing_round.get_relative_change_in_deviance()
@@ -119,13 +125,13 @@ class FederatedGLMStatus:
 @dataclass
 class RoomDTO:
     name: str
-    room_type: RoomType
+    algorithm: Algorithm
     owner_name: str
     is_locked: bool
     is_protected: bool
     def __init__(self, room: Room):
         self.name = room.name
-        self.room_type = room.room_type
+        self.algorithm = room.algorithm
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
         self.is_protected = room.password is not None
@@ -134,7 +140,7 @@ class RoomDTO:
 @dataclass
 class RoomDetailsDTO:
     name: str
-    room_type: RoomType
+    algorithm: Algorithm
     owner_name: str
     is_locked: bool
     is_hidden: bool
@@ -151,7 +157,7 @@ class RoomDetailsDTO:
     
     def __init__(self, room: Room, requesting_user: str=None):
         self.name = room.name
-        self.room_type = room.room_type
+        self.algorithm = room.algorithm
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
         self.is_hidden = room.is_hidden
@@ -164,7 +170,10 @@ class RoomDetailsDTO:
         self.result_labels = room.result_labels
         self.private_result = room.user_results[requesting_user] if room.user_results is not None and requesting_user in room.user_results else None
         self.private_labels = room.user_labels[requesting_user] if room.user_labels is not None and requesting_user in room.user_labels else None
-        self.federated_glm_status = FederatedGLMStatus(room.federated_glm, requesting_user)
+        if room.federated_glm is None or room.federated_glm.testing_engine.is_finished():
+            self.federated_glm_status = None
+        else:
+            self.federated_glm_status = FederatedGLMStatus(room.federated_glm, requesting_user)
         
 # ,------.                                      ,--.          
 # |  .--. ' ,---.  ,---. ,--.,--. ,---.  ,---.,-'  '-. ,---.  
@@ -176,6 +185,10 @@ class RoomDetailsDTO:
 @dataclass
 class CheckInRequest:
     username: str
+    algorithm: str
+    data_labels: List[str]
+    categorical_expressions: Dict[str, List[str]]
+    ordinal_expressions: Dict[str, List[str]]
         
 @dataclass
 class BasicRequest:
@@ -183,13 +196,14 @@ class BasicRequest:
     username: str
     
 @dataclass
-class ChangeUsernameRequest(BasicRequest):
+class UpdateUserRequest(BasicRequest):
+    algorithm: str
     new_username: str
     
 @dataclass
 class RoomCreationRequest(BasicRequest):
     room_name: str
-    room_type: str
+    algorithm: str
     password: str | None
     
 @dataclass
@@ -305,7 +319,14 @@ async def check_in(data: CheckInRequest) -> Response:
         new_username = username + f' ({username_offset})'
         username_offset += 1
         
-    conn = Connection(new_id, new_username, datetime.datetime.now())
+    conn = Connection(new_id,
+                      new_username,
+                      datetime.datetime.now(),
+                      algorithm=Algorithm(data.algorithm),
+                      data_labels=data.data_labels,
+                      categorical_expressions=data.categorical_expressions,
+                      ordinal_expressions=data.ordinal_expressions
+                      )
     connections[new_id] = conn
     user2connection[new_username] = conn
 
@@ -315,22 +336,25 @@ async def check_in(data: CheckInRequest) -> Response:
         status_code=200
         )
     
-@post("/change-name")
-async def change_name(data: ChangeUsernameRequest) -> Response:
+@post("/update-user")
+async def update_user(data: UpdateUserRequest) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     
-    if data.username is None or len(data.username.replace(r'\s', '')) == 0:
-        raise HTTPException(detail='Username is not accepted', status_code=400)
+    #if data.username is None or len(data.username.replace(r'\s', '')) == 0:
+    #    raise HTTPException(detail='Username is not accepted', status_code=400)
+    
+    if data.new_username is not None and len(data.new_username.replace(r'\s', '')) > 0:
+        username_offset = 1
+        occupied_usernames = [c.username for c in connections.values()]
+        new_username = data.new_username
+        while new_username in occupied_usernames:
+            new_username = data.new_username + f' ({username_offset})'
+            username_offset += 1
+            
+        connections[data.id].username = new_username
         
-    username_offset = 1
-    occupied_usernames = [c.username for c in connections.values()]
-    new_username = data.new_username
-    while new_username in occupied_usernames:
-        new_username = data.new_username + f' ({username_offset})'
-        username_offset += 1
-        
-    connections[data.id].username = new_username
+    connections[data.id].algorithm = Algorithm(data.algorithm)
     conn = connections[data.id]
 
     return Response(
@@ -402,7 +426,7 @@ async def create_room(data: RoomCreationRequest) -> Response:
         room_name_offset += 1
     
     room = Room(name=new_room_name,
-                room_type=data.room_type,
+                algorithm=Algorithm(data.algorithm),
                 owner_name=room_owner,
                 password=data.password,
                 is_locked=False,
@@ -531,6 +555,7 @@ async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_ki
         status_code=200
         )
     
+    
 #   ,-.,--. ,--.        ,-.  ,--.                ,--.        ,------.                          
 #  / .'|  | |  |,--,--, '. \ |  |    ,---.  ,---.|  |,-.     |  .--. ' ,---.  ,---. ,--,--,--. 
 # |  | |  | |  ||      \ |  ||  |   | .-. || .--'|     /     |  '--'.'| .-. || .-. ||        | 
@@ -627,9 +652,17 @@ async def receive_data(data: DataSubmissionRequest) -> Response:
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     
     
+    print(data.categorical_expressions)
+    print(data.ordinal_expressions)
+    
     # data to pandas conversion
     connections[data.id].data = pickle.loads(base64.b64decode(data.data.encode()))
     connections[data.id].data_labels = data.data_labels
+    connections[data.id].categorical_expressions = data.categorical_expressions
+    connections[data.id].ordinal_expressions = data.ordinal_expressions
+    
+    #if data.data_labels is None or data.categorical_expressions is None or data.ordinal_expressions is None:
+    #    raise HTTPException(detail='Invalid data provided', status_code=400)
     
     return Response(
         media_type=MediaType.TEXT,
@@ -751,7 +784,7 @@ def run_fed_glm(room_name):
     room = rooms[room_name]
     
     testing_engine = fedci.TestingEngine(set(*room.user_provided_labels))
-    required_labels = testing_engine.get_current_testing_round().get_required_labels()    
+    required_labels = testing_engine.get_current_test().get_required_labels()    
     pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
     
     room.federated_glm = FederatedGLMTesting(testing_engine=testing_engine,
@@ -780,29 +813,37 @@ async def run(data: IODExecutionRequest, room_name: str) -> Response:
     # ToDo change behavior based on room type:
     #   one run for pvalue aggregation only
     #   multiple runs for fedglm -> therefore, return in this function quickly. Set 'is_processing' and update FedGLMStatus etc
+    if room.algorithm == Algorithm.P_VALUE_AGGREGATION:
         
-    try:
-        result, result_labels, user_result, user_labels = run_iod(data, room_name)
-    except:
+        try:
+            result, result_labels, user_result, user_labels = run_iod(data, room_name)
+        except:
+            room = rooms[room_name]
+            room.is_processing = False
+            room.is_locked = True
+            room.is_hidden = True
+            rooms[room_name] = room
+            raise HTTPException(detail='Failed to execute IOD', status_code=500)
+        
         room = rooms[room_name]
+        for user in user_result:
+            if user not in room.users:
+                del user_result[user]
+        
+        room.result = result
+        room.result_labels = result_labels
+        room.user_results = user_result
+        room.user_labels = user_labels
         room.is_processing = False
+        room.is_finished = True
+        rooms[room_name] = room
+    elif room.algorithm == Algorithm.FEDERATED_GLM:
+        room.is_processing = True
         room.is_locked = True
         room.is_hidden = True
         rooms[room_name] = room
-        raise HTTPException(detail='Failed to execute IOD', status_code=500)
-    
-    room = rooms[room_name]
-    for user in user_result:
-        if user not in room.users:
-            del user_result[user]
-    
-    room.result = result
-    room.result_labels = result_labels
-    room.user_results = user_result
-    room.user_labels = user_labels
-    room.is_processing = False
-    room.is_finished = True
-    rooms[room_name] = room
+    else:
+        raise HTTPException(detail=f'Cannot run room of type {room.algorithm}', status_code=500)
     
     return Response(
         media_type=MediaType.JSON,
@@ -819,7 +860,7 @@ async def run(data: IODExecutionRequest, room_name: str) -> Response:
 
 app = Litestar([
     health_check,
-    change_name,
+    update_user,
     check_in,
     create_room,
     get_rooms,
