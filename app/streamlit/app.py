@@ -28,6 +28,29 @@ import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
 
 
+# TO SEND SERIALIZED NP ARRAYS
+# import numpy as np
+# import base64
+# import json
+
+# def serialize_numpy_array(arr):
+#     # Convert NumPy array to bytes
+#     arr_bytes = arr.tobytes()
+#     # Encode bytes to base64 string
+#     arr_base64 = base64.b64encode(arr_bytes).decode('utf-8')
+#     # Create a JSON-serializable dictionary
+#     data = {
+#         'shape': arr.shape,
+#         'dtype': str(arr.dtype),
+#         'data': arr_base64
+#     }
+#     return json.dumps(data)
+
+# # Example usage
+# arr = np.array([[1, 2, 3], [4, 5, 6]])
+# serialized_arr = serialize_numpy_array(arr)
+
+
 # TODO: Make alpha in IOD configurable (server)
 # TODO: Make m.max configurable
 
@@ -56,7 +79,7 @@ if 'server_url' not in st.session_state:
     if 'LITESTAR_CONTAINER_NAME' in os.environ and 'LITESTAR_PORT' in os.environ:
         st.session_state['server_url'] = f'http://{os.environ["LITESTAR_CONTAINER_NAME§§§"]}:{os.environ["LITESTAR_PORT"]}' # TODO: load default url from config file
     else:
-        st.session_state['server_url'] = 'http://127.0.0.1:8080'
+        st.session_state['server_url'] = 'http://127.0.0.1:8000'
 if 'last_health_check' not in st.session_state:
     st.session_state['last_health_check'] = None
 if 'is_connected_to_server' not in st.session_state:

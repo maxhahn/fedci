@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from typing import List, Dict, Set, Optional
+from typing import List, Dict, Set, Optional, Tuple
 
 from litestar import Litestar, MediaType, Response, post, get
 from litestar.exceptions import HTTPException
@@ -25,6 +25,16 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fedci
+
+import json
+def deserialize_numpy_array(serialized_data):
+    data = json.loads(serialized_data)
+    arr_base64 = data['data']
+    arr_bytes = base64.b64decode(arr_base64)
+    arr = np.frombuffer(arr_bytes, dtype=data['dtype']).reshape(data['shape'])
+    return arr
+    
+
 
 #import fedci as fedci
 
@@ -58,10 +68,20 @@ class FederatedGLMData:
     local_deviance: float
     
 @dataclass
+class FederatedGLMDataDTO:
+    xwx: np.typing.NDArray
+    xwz: np.typing.NDArray
+    local_deviance: float
+    
+@dataclass
+class NPArray:
+    shape: Tuple[int]
+    dtype: str
+    data: str
+    
+@dataclass
 class FederatedGLMTesting:
     testing_engine: fedci.TestingEngine
-    categorical_expressions: Dict[str, List[str]]
-    ordinal_expressions: Dict[str, List[str]]
     pending_data: Dict[str, FederatedGLMData]
     start_of_last_iteration: datetime.datetime
     
@@ -77,6 +97,8 @@ class Room:
     is_finished: bool
     users: Set[str]
     user_provided_labels: Dict[str, List[str]]
+    user_provided_categorical_expressions: Dict[str, Dict[str, List[str]]]
+    user_provided_ordinal_expressions: Dict[str, Dict[str, List[str]]]
     result: List[List[List[int]]]
     result_labels: List[List[str]]
     user_results: Dict[str, List[List[int]]]
@@ -149,6 +171,8 @@ class RoomDetailsDTO:
     is_protected: bool
     users: List[str]
     user_provided_labels: Dict[str, List[str]]
+    user_provided_categorical_expressions: Dict[str, List[str]]
+    user_provided_ordinal_expressions: Dict[str, List[str]]
     result: List[List[List[int]]]
     result_labels: List[List[str]]
     private_result: List[List[int]]
@@ -166,11 +190,25 @@ class RoomDetailsDTO:
         self.is_protected = room.password is not None
         self.users = sorted(list(room.users))
         self.user_provided_labels = room.user_provided_labels
+        
+        # TODO: prevent repeated calculation of this
+        categorical_expressions = {}
+        for expressions in room.user_provided_categorical_expressions.values():
+            for k,v in expressions.values():
+                categorical_expressions[k] = sorted(list(set(categorical_expressions.get(k, [])).union(set(v))))
+        ordinal_expressions = {}
+        for expressions in room.user_provided_ordinal_expressions.values():
+            for k,v in expressions.values():
+                ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))))
+                
+        self.user_provided_categorical_expressions = categorical_expressions
+        self.user_provided_ordinal_expressions = ordinal_expressions
+        
         self.result = room.result
         self.result_labels = room.result_labels
         self.private_result = room.user_results[requesting_user] if room.user_results is not None and requesting_user in room.user_results else None
         self.private_labels = room.user_labels[requesting_user] if room.user_labels is not None and requesting_user in room.user_labels else None
-        if room.federated_glm is None or room.federated_glm.testing_engine.is_finished():
+        if room.federated_glm is None or room.federated_glm.testing_engine.is_finished:
             self.federated_glm_status = None
         else:
             self.federated_glm_status = FederatedGLMStatus(room.federated_glm, requesting_user)
@@ -213,7 +251,6 @@ class JoinRoomRequest(BasicRequest):
 @dataclass
 class DataSubmissionRequest(BasicRequest):
     data: str
-    data_labels: List[str]
     
 @dataclass
 class IODExecutionRequest(BasicRequest):
@@ -435,6 +472,8 @@ async def create_room(data: RoomCreationRequest) -> Response:
                 is_finished=False,
                 users={room_owner},
                 user_provided_labels={room_owner: connections[data.id].data_labels},
+                user_provided_categorical_expressions={room_owner: connections[data.id].categorical_expressions},
+                user_provided_ordinal_expressions={room_owner: connections[data.id].ordinal_expressions},
                 result=None,
                 result_labels=None,
                 user_results={},
@@ -473,6 +512,8 @@ async def join_room(data: JoinRoomRequest, room_name: str) -> Response:
     
     room.users.add(data.username)
     room.user_provided_labels[data.username] = connections[data.id].data_labels
+    room.user_provided_categorical_expressions[data.username] = connections[data.id].categorical_expressions
+    room.user_provided_ordinal_expressions[data.username] = connections[data.id].ordinal_expressions
     user2room[data.username] = room
     
     return Response(
@@ -506,6 +547,8 @@ async def leave_room(data: BasicRequest, room_name: str) -> Response:
             )
     
     del room.user_provided_labels[data.username]
+    del room.user_provided_categorical_expressions[data.username]
+    del room.user_provided_ordinal_expressions[data.username]
     if room.is_finished:
         del room.user_results[data.username]
         
@@ -544,6 +587,8 @@ async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_ki
     
     room.users.remove(username_to_kick)
     del room.user_provided_labels[username_to_kick]
+    del room.user_provided_categorical_expressions[username_to_kick]
+    del room.user_provided_ordinal_expressions[username_to_kick]
     if room.is_finished:
         del room.user_results[username_to_kick]
     del user2room[username_to_kick]
@@ -653,7 +698,6 @@ async def receive_data(data: DataSubmissionRequest) -> Response:
     
     # data to pandas conversion
     connections[data.id].data = pickle.loads(base64.b64decode(data.data.encode()))
-    connections[data.id].data_labels = data.data_labels
     
     #if data.data_labels is None or data.categorical_expressions is None or data.ordinal_expressions is None:
     #    raise HTTPException(detail='Invalid data provided', status_code=400)
@@ -777,13 +821,29 @@ def run_fed_glm(room_name):
     # data contains alpha for FCI
     room = rooms[room_name]
     
-    testing_engine = fedci.TestingEngine(set(*room.user_provided_labels))
+    available_labels = set([vi for v in room.user_provided_labels.values() for vi in v])
+    categorical_expressions = {}
+    for expressions in room.user_provided_categorical_expressions.values():
+        for k,v in expressions.items():
+            categorical_expressions[k] = sorted(list(set(categorical_expressions.get(k, [])).union(set(v))))
+            #reversed_category_expressions = {vi:k for k,v in categorical_expressions.items() for vi in v}
+    ordinal_expressions = {}
+    for expressions in room.user_provided_ordinal_expressions.values():
+        for k,v in expressions.items():
+            ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))))
+            #reversed_category_expressions = {vi:k for k,v in categorical_expressions.items() for vi in v}
+            
+    print(categorical_expressions)
+    print(ordinal_expressions)
+    testing_engine = fedci.TestingEngine(available_labels, categorical_expressions, ordinal_expressions)
     required_labels = testing_engine.get_current_test().get_required_labels()    
     pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
     
     room.federated_glm = FederatedGLMTesting(testing_engine=testing_engine,
                                              pending_data=pending_data,
-                                             start_of_last_iteration=datetime.datetime.now())
+                                             start_of_last_iteration=datetime.datetime.now()
+                                             
+                                             )
     
     rooms[room_name] = room
     
@@ -836,6 +896,9 @@ async def run(data: IODExecutionRequest, room_name: str) -> Response:
         room.is_locked = True
         room.is_hidden = True
         rooms[room_name] = room
+        
+        run_fed_glm(room_name)
+        
     else:
         raise HTTPException(detail=f'Cannot run room of type {room.algorithm}', status_code=500)
     
