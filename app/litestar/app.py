@@ -651,15 +651,9 @@ async def receive_data(data: DataSubmissionRequest) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     
-    
-    print(data.categorical_expressions)
-    print(data.ordinal_expressions)
-    
     # data to pandas conversion
     connections[data.id].data = pickle.loads(base64.b64decode(data.data.encode()))
     connections[data.id].data_labels = data.data_labels
-    connections[data.id].categorical_expressions = data.categorical_expressions
-    connections[data.id].ordinal_expressions = data.ordinal_expressions
     
     #if data.data_labels is None or data.categorical_expressions is None or data.ordinal_expressions is None:
     #    raise HTTPException(detail='Invalid data provided', status_code=400)
