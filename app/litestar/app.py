@@ -26,13 +26,29 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import fedci
 
+import numpy as np
+import base64
 import json
+
 def deserialize_numpy_array(serialized_data):
     data = json.loads(serialized_data)
     arr_base64 = data['data']
     arr_bytes = base64.b64decode(arr_base64)
     arr = np.frombuffer(arr_bytes, dtype=data['dtype']).reshape(data['shape'])
     return arr
+
+def serialize_numpy_array(arr):
+    # Convert NumPy array to bytes
+    arr_bytes = arr.tobytes()
+    # Encode bytes to base64 string
+    arr_base64 = base64.b64encode(arr_bytes).decode('utf-8')
+    # Create a JSON-serializable dictionary
+    data = {
+        'shape': arr.shape,
+        'dtype': str(arr.dtype),
+        'data': arr_base64
+    }
+    return json.dumps(data)
     
 
 
@@ -123,13 +139,14 @@ class UserDTO:
         self.username = conn.username
         self.algorithm = conn.algorithm.value
         self.data_labels = conn.data_labels
-        
+
+# TODO: add flag for regular operation and for llf correction for ordinal and categorical data
 @dataclass
 class FederatedGLMStatus:
     y_label: str
     X_labels: List[str]
     is_awaiting_response: bool
-    current_beta: np.typing.NDArray
+    current_beta: object # bytes?
     current_iteration: int
     current_relative_change_in_deviance: float
     start_of_last_iteration: datetime.datetime
@@ -139,7 +156,7 @@ class FederatedGLMStatus:
         self.y_label = testing_round.y_label
         self.X_labels = testing_round.X_labels
         self.is_awaiting_response = requesting_user is not None and glm_testing_state.pending_data.get(requesting_user) is None
-        self.current_beta = testing_round.beta
+        self.current_beta = serialize_numpy_array(testing_round.beta)
         self.current_iteration = testing_round.iterations
         self.current_relative_change_in_deviance = testing_round.get_relative_change_in_deviance()
         self.start_of_last_iteration = glm_testing_state.start_of_last_iteration
@@ -769,10 +786,22 @@ def provide_fed_glm_data(data: FedGLMDataProvidingRequest, room_name: str):
             status_code=200
             )
         
+    print(data)
+        
+    provided_beta = deserialize_numpy_array(data.beta)
+    provided_xwx = deserialize_numpy_array(data.xwx)
+    provided_xwz = deserialize_numpy_array(data.xwz)
+    
+    print('Incoming request ---')
+    print(provided_beta.shape)
+    print(provided_xwx.shape)
+    print(provided_xwz.shape)
+        
     curr_testing_round =  room.federated_glm.testing_engine.get_current_testing_round()
     curr_beta = curr_testing_round.beta
     curr_iteration = curr_testing_round.iterations
     
+    # TODO: change beta comparison to work with provided_beta
     if data.current_beta != curr_beta or data.current_iteration != curr_iteration:
         return Response(
             content='The provided data was not usable in this iteration',

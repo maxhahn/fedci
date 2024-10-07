@@ -29,22 +29,29 @@ from rpy2.robjects import pandas2ri
 
 
 # TO SEND SERIALIZED NP ARRAYS
-# import numpy as np
-# import base64
-# import json
+import numpy as np
+import base64
+import json
 
-# def serialize_numpy_array(arr):
-#     # Convert NumPy array to bytes
-#     arr_bytes = arr.tobytes()
-#     # Encode bytes to base64 string
-#     arr_base64 = base64.b64encode(arr_bytes).decode('utf-8')
-#     # Create a JSON-serializable dictionary
-#     data = {
-#         'shape': arr.shape,
-#         'dtype': str(arr.dtype),
-#         'data': arr_base64
-#     }
-#     return json.dumps(data)
+def deserialize_numpy_array(serialized_data):
+    data = json.loads(serialized_data)
+    arr_base64 = data['data']
+    arr_bytes = base64.b64decode(arr_base64)
+    arr = np.frombuffer(arr_bytes, dtype=data['dtype']).reshape(data['shape'])
+    return arr
+
+def serialize_numpy_array(arr):
+    # Convert NumPy array to bytes
+    arr_bytes = arr.tobytes()
+    # Encode bytes to base64 string
+    arr_base64 = base64.b64encode(arr_bytes).decode('utf-8')
+    # Create a JSON-serializable dictionary
+    data = {
+        'shape': arr.shape,
+        'dtype': str(arr.dtype),
+        'data': arr_base64
+    }
+    return json.dumps(data)
 
 # # Example usage
 # arr = np.array([[1, 2, 3], [4, 5, 6]])
@@ -199,6 +206,10 @@ def step_check_in_to_server():
     # TODO: ensure selected algorithm is default select
     algo_type = col2.selectbox('Select algorithm', ['IOD', 'FEDGLM'], label_visibility='collapsed')
     
+    # data = x if a else y
+    # submit data
+    
+    
     col3.write('Submit!')
     if st.session_state['server_provided_user_id'] is None:
         button = col3.button(':arrow_heading_up:', help='Submit check-in request', use_container_width=True)
@@ -208,6 +219,8 @@ def step_check_in_to_server():
         fedglm_client = st.session_state['fedglm_client']
         categorical_expressions = fedglm_client.get_categories()
         ordinal_expressions = fedglm_client.get_ordinals() 
+        
+        # TODO fix selection of algorithm and submission of required variables
         
         request_params = {
             'username': username,
@@ -605,6 +618,18 @@ def step_show_room_details():
     
     st.write(f"<sup>Room protocol: {st.session_state['current_room']['algorithm']}<sup>", unsafe_allow_html=True)
     
+    if room['is_processing']:
+        fedglm_status = room['federated_glm_status']
+        if fedglm_status['is_awaiting_response']:
+            fedglm_client = st.session_state['fedglm_client']
+            beta = deserialize_numpy_array(fedglm_status['beta'])
+            y_label  = fedglm_status['y_label']
+            X_labels = fedglm_status['X_labels']
+            fedglm_result = fedglm_client.compute(y_label, X_labels, beta)
+            # r1, r2, deviance, llf, rss, len(y)
+            #fedglm_result
+        
+    
     _, col1, col2, col3, col4, col5, _ = st.columns((1,1,1,1,1,1,1))
         
     if col1.button(':arrows_counterclockwise:', help='Refresh the room', use_container_width=True):
@@ -808,7 +833,7 @@ def main():
     col2.write('<sup>View our GitHub [here](https://www.google.com)</sup>', unsafe_allow_html=True)
     
     if check_server_connection():
-        st.info('Server connection established' + ('' if st.session_state['username'] is None else f" - checked in as: {st.session_state['username']} ({st.session_state['selected_algorithm']})"))
+        st.info('Server connection established' + ('' if st.session_state['selected_algorithm'] is None else f" - running {st.session_state['selected_algorithm']} method") + ('' if st.session_state['username'] is None else f" - checked in as: {st.session_state['username']}"))
   
     refresh_failure = False
     # refresh current room

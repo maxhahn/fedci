@@ -1,31 +1,16 @@
 import polars as pl
 import polars.selectors as cs
 import numpy as np
-import math
 import pickle
 from typing import List
 from itertools import chain, combinations
-import matplotlib.pyplot as plt
-from collections import defaultdict
 
 import statsmodels.api as sm
 from statsmodels.genmod.generalized_linear_model import GLMResults
 from statsmodels.genmod.families import family
 
-import graphviz
-import networkx as nx
-from cdt.data import AcyclicGraphGenerator
 import scipy
-
 from scipy import stats
-from pycit import citest
-from pgmpy.estimators import CITests
-from tqdm import tqdm
-
-import rpy2.robjects as ro
-from rpy2.robjects import pandas2ri
-from collections import OrderedDict
-
 
 # Testing Classes
 
@@ -475,7 +460,11 @@ class Client:
         cat_association = np.where(cat_association == 1)[0]
         
         #probas = probas1 - probas0
-        llf = np.sum(np.log(np.take(probas, cat_association)))
+        probas = np.take(probas, cat_association)
+        llf = np.sum(np.log(probas))
+        
+        #logit_probas = np.log(probas / (1-probas))
+        #llf = np.sum(logit_probas)
         
         return llf
     
@@ -524,8 +513,20 @@ class Client:
         
         probas = probas1 - probas0
         probas = np.take(probas, cat_association)
-        #probas = np.clip(probas, a_min=1e-10, a_max=None)
+        probas = np.clip(probas, a_min=1e-10, a_max=None)
         llf = np.sum(np.log(probas))
+        
+        # LOGITS APPROACH
+        #logit_probas = np.log(probas / (1-probas))
+        #llf = np.sum(logit_probas)
+        
+        # ABS APPROACH
+        #llf = np.sum(np.log(np.abs(probas)))
+        
+        # OFFSET APPROACH
+        #offset = abs(np.min(probas)) + 1e-10
+        #llf = np.sum(np.log(probas + offset))
+        
         
         return llf
     
@@ -676,7 +677,6 @@ class SymmetricLikelihoodRatioTest:
         
         assert lrt0.y_label == lrt1.x_label or lrt1.x_label is None
         assert lrt1.y_label == lrt0.x_label or lrt0.x_label is None
-        
         
         #print(lrt0.s_labels, lrt1.s_labels)
         assert lrt0.s_labels.sort() == lrt1.s_labels.sort()

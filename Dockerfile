@@ -54,6 +54,7 @@ RUN apt install -y pip
 # Python packages
 RUN python3 -m pip install --upgrade pip setuptools wheel
 RUN pip install pandas graphviz rpy2 litestar[standard] streamlit extra-streamlit-components streamlit-extras streamlit-autorefresh
+RUN pip install statsmodels scipy
 
 # make startup script executable
 RUN chmod +x startup.sh
