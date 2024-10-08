@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from enum import Enum
 
 from typing import List, Dict, Set, Optional, Tuple
@@ -81,13 +81,27 @@ class Connection:
 class FederatedGLMData:
     xwx: np.typing.NDArray
     xwz: np.typing.NDArray
-    local_deviance: float
+    dev: float
+    llf: float
+    rss: float
+    nobs: int
+    
+    def __init__(self, fedglm_data_dto):
+        self.xwx = deserialize_numpy_array(fedglm_data_dto.xwx)
+        self.xwz = deserialize_numpy_array(fedglm_data_dto.xwz)
+        self.dev = fedglm_data_dto.dev
+        self.llf = fedglm_data_dto.llf
+        self.rss = fedglm_data_dto.rss
+        self.nobs = fedglm_data_dto.nobs
     
 @dataclass
 class FederatedGLMDataDTO:
-    xwx: np.typing.NDArray
-    xwz: np.typing.NDArray
-    local_deviance: float
+    xwx: object
+    xwz: object
+    dev: float
+    llf: float
+    rss: float
+    nobs: int
     
 @dataclass
 class NPArray:
@@ -211,12 +225,12 @@ class RoomDetailsDTO:
         # TODO: prevent repeated calculation of this
         categorical_expressions = {}
         for expressions in room.user_provided_categorical_expressions.values():
-            for k,v in expressions.values():
+            for k,v in expressions.items():
                 categorical_expressions[k] = sorted(list(set(categorical_expressions.get(k, [])).union(set(v))))
         ordinal_expressions = {}
         for expressions in room.user_provided_ordinal_expressions.values():
-            for k,v in expressions.values():
-                ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))))
+            for k,v in expressions.items():
+                ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))), key=lambda x: int(x.split('__ord__')[-1]))
                 
         self.user_provided_categorical_expressions = categorical_expressions
         self.user_provided_ordinal_expressions = ordinal_expressions
@@ -274,9 +288,10 @@ class IODExecutionRequest(BasicRequest):
     alpha: float
     
 @dataclass
-class FedGLMDataProvidingRequest(BasicRequest, FederatedGLMData):
-    current_beta: np.typing.NDArray
+class FedGLMDataProvidingRequest(BasicRequest):
+    current_beta: object
     current_iteration: int
+    data: FederatedGLMDataDTO
     
 
 # ,------.            ,--.               ,---.   ,--.                         ,--.                                
@@ -430,6 +445,7 @@ async def update_user(data: UpdateUserRequest) -> Response:
 async def get_rooms(data: BasicRequest) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
+
     return Response(
         media_type=MediaType.JSON,
         content=[RoomDTO(room) for room in rooms.values() if not room.is_hidden],
@@ -526,11 +542,11 @@ async def join_room(data: JoinRoomRequest, room_name: str) -> Response:
         raise HTTPException(detail='The room is locked', status_code=403)
     if room.password != data.password:
         raise HTTPException(detail='Incorrect password', status_code=403)
-    
+
     room.users.add(data.username)
-    room.user_provided_labels[data.username] = connections[data.id].data_labels
     room.user_provided_categorical_expressions[data.username] = connections[data.id].categorical_expressions
     room.user_provided_ordinal_expressions[data.username] = connections[data.id].ordinal_expressions
+    room.user_provided_labels[data.username] = connections[data.id].data_labels
     user2room[data.username] = room
     
     return Response(
@@ -769,49 +785,49 @@ def run_iod(data, room_name):
         
     return run_riod(zip(participants, participant_data, participant_data_labels), alpha=data.alpha)
 
-
+# TODO: set max regressors
 # todo: should lock written data 
 # todo: verify if object is updated by reference or by value - reassigning to dict may not be required
 @post("/rooms/{room_name:str}/federated-glm-data")
-def provide_fed_glm_data(data: FedGLMDataProvidingRequest, room_name: str):
+def provide_fed_glm_data(data: FedGLMDataProvidingRequest, room_name: str) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
     room = rooms[room_name]
     
+    print('Start ---')
+    
     if data.username not in room.federated_glm.pending_data.keys():
+        print('Exit --- Unrequired data')
+        print(data.username)
+        print(room.federated_glm)
         return Response(
-            content='The provided data was required',
+            content='The provided data was not required',
             status_code=200
             )
         
+    print('Incoming request ---')
     print(data)
         
-    provided_beta = deserialize_numpy_array(data.beta)
-    provided_xwx = deserialize_numpy_array(data.xwx)
-    provided_xwz = deserialize_numpy_array(data.xwz)
-    
-    print('Incoming request ---')
-    print(provided_beta.shape)
-    print(provided_xwx.shape)
-    print(provided_xwz.shape)
+    provided_beta = deserialize_numpy_array(data.current_beta)
+    provided_iteration = data.current_iteration
         
-    curr_testing_round =  room.federated_glm.testing_engine.get_current_testing_round()
+    curr_testing_round =  room.federated_glm.testing_engine.get_current_test()
     curr_beta = curr_testing_round.beta
     curr_iteration = curr_testing_round.iterations
+    print(provided_iteration, curr_iteration)
     
     # TODO: change beta comparison to work with provided_beta
-    if data.current_beta != curr_beta or data.current_iteration != curr_iteration:
+    # TODO numpy array comparison problem. BAD. Fix with np.eq or smth
+    if provided_iteration != curr_iteration: #provided_beta != curr_beta or 
         return Response(
             content='The provided data was not usable in this iteration',
             status_code=200
             )
 
-    fed_glm_data = FederatedGLMData(xwx=data.xwx, xwz=data.xwz, local_deviance=data.local_deviance)
-    room.federated_glm.pending_data[data.username] = fed_glm_data
-    
-    
+    fedglm_data = FederatedGLMData(data.data)
+    room.federated_glm.pending_data[data.username] = fedglm_data
     
     if any([v is None for v in room.federated_glm.pending_data.values()]):
         rooms[room_name] = room
@@ -821,12 +837,16 @@ def provide_fed_glm_data(data: FedGLMDataProvidingRequest, room_name: str):
                 status_code=200
                 )
         
-    fed_glm_results = [(d.xwx, d.xwz, d.local_deviance) for d in room.federated_glm.pending_data.values()]
-    room.federated_glm.testing_engine.aggregate_results(fed_glm_results)
+    fedglm_results = {k:tuple(asdict(d).values()) for k,d in room.federated_glm.pending_data.items()}
+    room.federated_glm.testing_engine.aggregate_results(fedglm_results)
     
-    curr_testing_round = room.federated_glm.testing_engine.get_current_testing_round()
+    curr_testing_round = room.federated_glm.testing_engine.get_current_test()
     if curr_testing_round is not None:
+        _, reversed_categorical_expressions, _, reversed_ordinal_expressions = get_categorical_and_ordinal_expressions_with_reverse(room)
+        
         required_labels = curr_testing_round.get_required_labels()    
+        required_labels = get_base_labels(required_labels, reversed_categorical_expressions, reversed_ordinal_expressions)
+
         pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
         
         room.federated_glm.pending_data = pending_data
@@ -846,32 +866,50 @@ def provide_fed_glm_data(data: FedGLMDataProvidingRequest, room_name: str):
             status_code=200
             )
     
+# TODO: Make room details have more cols for owner - kick col and new avg. response time col
+
+def get_categorical_and_ordinal_expressions_with_reverse(room):
+    categorical_expressions = {}
+    for expressions in room.user_provided_categorical_expressions.values():
+        for k,v in expressions.items():
+            categorical_expressions[k] = sorted(list(set(categorical_expressions.get(k, [])).union(set(v))))
+    ordinal_expressions = {}
+    for expressions in room.user_provided_ordinal_expressions.values():
+        for k,v in expressions.items():
+            ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))))
+    
+    reversed_category_expressions = {vi:k for k,v in categorical_expressions.items() for vi in v}
+    reversed_ordinal_expressions = {vi:k for k,v in ordinal_expressions.items() for vi in v}
+            
+    return categorical_expressions, reversed_category_expressions, ordinal_expressions, reversed_ordinal_expressions
+
+def get_base_labels(labels, rev_cat_exp, rev_ord_exp):
+    result = []
+    for label in labels:
+        if label in rev_cat_exp:
+            result.append(rev_cat_exp[label])
+        elif label in rev_ord_exp:
+            result.append(rev_ord_exp[label])
+        else:
+            result.append(label)
+    return result
+    
 def run_fed_glm(room_name):
     # data contains alpha for FCI
     room = rooms[room_name]
     
     available_labels = set([vi for v in room.user_provided_labels.values() for vi in v])
-    categorical_expressions = {}
-    for expressions in room.user_provided_categorical_expressions.values():
-        for k,v in expressions.items():
-            categorical_expressions[k] = sorted(list(set(categorical_expressions.get(k, [])).union(set(v))))
-            #reversed_category_expressions = {vi:k for k,v in categorical_expressions.items() for vi in v}
-    ordinal_expressions = {}
-    for expressions in room.user_provided_ordinal_expressions.values():
-        for k,v in expressions.items():
-            ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))))
-            #reversed_category_expressions = {vi:k for k,v in categorical_expressions.items() for vi in v}
-            
-    print(categorical_expressions)
-    print(ordinal_expressions)
+    categorical_expressions, reversed_categorical_expressions, ordinal_expressions, reversed_ordinal_expressions = get_categorical_and_ordinal_expressions_with_reverse(room)
+
     testing_engine = fedci.TestingEngine(available_labels, categorical_expressions, ordinal_expressions)
-    required_labels = testing_engine.get_current_test().get_required_labels()    
+    required_labels = testing_engine.get_current_test().get_required_labels()
+    required_labels = get_base_labels(required_labels, reversed_categorical_expressions, reversed_ordinal_expressions)
+    
     pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
     
     room.federated_glm = FederatedGLMTesting(testing_engine=testing_engine,
                                              pending_data=pending_data,
                                              start_of_last_iteration=datetime.datetime.now()
-                                             
                                              )
     
     rooms[room_name] = room
@@ -959,5 +997,6 @@ app = Litestar([
     unlock_room,
     hide_room,
     reveal_room,
+    provide_fed_glm_data,
     run
     ])

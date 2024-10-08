@@ -73,6 +73,8 @@ if not os.path.exists(upload_dir):
     os.makedirs(upload_dir, exist_ok=True)
 if not os.path.exists(ci_result_dir):
     os.makedirs(ci_result_dir, exist_ok=True)
+    
+os.environ['OMP_NUM_THREADS'] = "4"
 
 #  ,---.   ,--.            ,--.             ,--.        ,--.  ,--.   
 # '   .-',-'  '-. ,--,--.,-'  '-. ,---.     |  |,--,--, `--',-'  '-. 
@@ -198,6 +200,9 @@ def step_check_in_to_server():
             return
         
     st.write('---')
+    
+    container = st.container()
+    
     col1, col2, col3 = st.columns((4,2,1))
     col1.write('Please enter a username:')
     username = col1.text_input('Please chose your username', placeholder=st.session_state['username'], label_visibility='collapsed')
@@ -205,6 +210,9 @@ def step_check_in_to_server():
     col2.write('Select algorithm')
     # TODO: ensure selected algorithm is default select
     algo_type = col2.selectbox('Select algorithm', ['IOD', 'FEDGLM'], label_visibility='collapsed')
+    
+    if algo_type == 'FEDGLM':
+        container.warning('Checking in with the server using FEDGLM will transmit the expression levels of categorical and ordinal variables to the server')
     
     # data = x if a else y
     # submit data
@@ -519,10 +527,11 @@ def room_join_password_dialog(room_name):
         if len(password) == 0:
             password = None
 
-        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room_name}/join', payload={'id': st.session_state['server_provided_user_id'],
-                                                                'username': st.session_state['username'],
-                                                                'password': password})
-        
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room_name}/join', payload={
+            'id': st.session_state['server_provided_user_id'],
+            'username': st.session_state['username'],
+            'password': password
+            })
         
         if r is None:
             return
@@ -606,6 +615,52 @@ def step_join_rooms():
 # |  |\  \ ' '-' '' '-' '|  |  |  |    |  '--'  /\   --.  |  |  \ '-'  ||  ||  |.-'  `) 
 # `--' '--' `---'  `---' `--`--`--'    `-------'  `----'  `--'   `--`--'`--'`--'`----' 
 
+
+def provide_fedglm_data(room, fedglm_status):
+    st.session_state['do_autorefresh'] = False
+    
+    if fedglm_status is None or not fedglm_status['is_awaiting_response']:
+        return
+    
+    # Get Client and run step
+    fedglm_client = st.session_state['fedglm_client']
+        
+    beta = deserialize_numpy_array(fedglm_status['current_beta'])
+    y_label  = fedglm_status['y_label']
+    X_labels = fedglm_status['X_labels']
+    
+    print(f'FEDGLM - Running model for {y_label} ~ {", ".join(X_labels)}, with beta {beta.tolist()}')
+    
+    fedglm_result = fedglm_client.compute(y_label, X_labels, beta)
+    
+    print(f'FEDGLM - Client LLF {fedglm_result[3]}')
+    
+    # Unpack result and send request
+    fedglm_result = dict(zip(('xwx', 'xwz', 'dev', 'llf', 'rss', 'nobs'), fedglm_result))
+    
+    fedglm_result['xwx'] = serialize_numpy_array(fedglm_result['xwx'])
+    fedglm_result['xwz'] = serialize_numpy_array(fedglm_result['xwz'])
+    # response beta: fedglm_status['beta'], fedglm_status['current_iteration']
+    
+    print(f'FEDGLM - Posting to server')
+    
+    r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/federated-glm-data', payload={
+        'id': st.session_state['server_provided_user_id'],
+        'username': st.session_state['username'],
+        'current_beta': fedglm_status['current_beta'],
+        'current_iteration': fedglm_status['current_iteration'],
+        'data': fedglm_result
+        })
+    
+    if r is None:
+            return
+    if r.status_code == 200:
+        st.session_state['do_autorefresh'] = True
+        st.rerun()
+        return
+    st.error(f'An error occured during FEDGLM')
+    return
+
 def step_show_room_details():
     room = st.session_state['current_room']
     if room['is_processing']:
@@ -618,17 +673,7 @@ def step_show_room_details():
     
     st.write(f"<sup>Room protocol: {st.session_state['current_room']['algorithm']}<sup>", unsafe_allow_html=True)
     
-    if room['is_processing']:
-        fedglm_status = room['federated_glm_status']
-        if fedglm_status['is_awaiting_response']:
-            fedglm_client = st.session_state['fedglm_client']
-            beta = deserialize_numpy_array(fedglm_status['beta'])
-            y_label  = fedglm_status['y_label']
-            X_labels = fedglm_status['X_labels']
-            fedglm_result = fedglm_client.compute(y_label, X_labels, beta)
-            # r1, r2, deviance, llf, rss, len(y)
-            #fedglm_result
-        
+    spinner_placeholder = st.empty()
     
     _, col1, col2, col3, col4, col5, _ = st.columns((1,1,1,1,1,1,1))
         
@@ -746,6 +791,29 @@ def step_show_room_details():
                     st.rerun()
                     return
                 st.error(f'Failed to kick user')
+                
+                
+    if room['algorithm'] == 'FEDGLM' and room['is_processing']:
+        fedglm_status = room['federated_glm_status'] 
+        if fedglm_status is None:
+            raise Exception('FEDGLM STATUS CANNOT BE NONE IF ROOM IS PROCESSING')
+        
+        print(f'ENTERING FEDGLM FUNCTION - room iteration {fedglm_status["current_iteration"]}')
+        
+        fedglm_client = st.session_state['fedglm_client']
+        if not hasattr(fedglm_client, 'category_expressions'):
+            fedglm_client.receive_category_expressions(room['user_provided_categorical_expressions'])
+         
+        # TODO: fix flashing during fast processing   
+        #@st.fragment()
+        #def frag_func(room, fedglm_status):
+        #    with st.spinner(f'Running regression:  {fedglm_status["y_label"]} ~ {", ".join(fedglm_status["X_labels"] + ["1"])}'):
+        #        provide_fedglm_data(room, fedglm_status) 
+        with spinner_placeholder:
+            #frag_func(room, fedglm_status)
+            with st.spinner(f'Running regression:  {fedglm_status["y_label"]} ~ {", ".join(fedglm_status["X_labels"] + ["1"])}'):
+                provide_fedglm_data(room, fedglm_status)            
+    
     return
 
 # ,------.                       ,--.  ,--.      ,--.   ,--.,--.                       ,--.,--.                 ,--.  ,--.                

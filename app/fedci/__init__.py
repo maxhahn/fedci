@@ -34,8 +34,8 @@ class TestingRound:
         self.tikhonov_lambda = tikhonov_lambda
         self._init_beta0()
         self.client_data = {
-            'xtx': [],
-            'xtz': [],
+            'xwx': [],
+            'xwz': [],
             'dev': [],
             'llf': [],
             'rss': [],
@@ -80,11 +80,11 @@ class TestingRound:
         self.providing_clients = set(results.keys())
         
         client_data = [[(k,vi) for vi in v] for k,v in results.items()]
-        xtx, xtz, dev, llf, rss, nobs = zip(*client_data)
-        xtx, xtz, dev, llf, rss, nobs = dict(xtx), dict(xtz), dict(dev), dict(llf), dict(rss), dict(nobs)
+        xwx, xwz, dev, llf, rss, nobs = zip(*client_data)
+        xwx, xwz, dev, llf, rss, nobs = dict(xwx), dict(xwz), dict(dev), dict(llf), dict(rss), dict(nobs)
         
-        self.client_data['xtx'] = xtx
-        self.client_data['xtz'] = xtz
+        self.client_data['xwx'] = xwx
+        self.client_data['xwz'] = xwz
         self.client_data['dev'] = dev
         self.client_data['llf'] = llf
         self.client_data['rss'] = rss
@@ -94,17 +94,17 @@ class TestingRound:
     def aggregate_results(self, results):
         self.update_state(results)
         
-        xtx = self.client_data['xtx']  
-        xtz = self.client_data['xtz']  
+        xwx = self.client_data['xwx']  
+        xwz = self.client_data['xwz']  
         dev = self.client_data['dev']  
         llf = self.client_data['llf']  
         rss = self.client_data['rss']  
         nobs = self.client_data['nobs']
         
-        xtx_agg = sum(xtx.values())
-        xtx_agg = xtx_agg + self.tikhonov_lambda*np.eye(xtx_agg.shape[0]) # tikhonov/ridge regularization
+        xwx_agg = sum(xwx.values())
+        xwx_agg = xwx_agg + self.tikhonov_lambda*np.eye(xwx_agg.shape[0]) # tikhonov/ridge regularization
         
-        self.beta = np.linalg.inv(xtx_agg) @ sum(xtz.values())
+        self.beta = np.linalg.inv(xwx_agg) @ sum(xwz.values())
         self.last_deviance = self.deviance
         self.deviance = sum(dev.values())
         self.llf = sum(llf.values())
@@ -514,16 +514,21 @@ class Client:
     #     return self._compute(_data, y_label, X_labels, beta)
         
     def compute(self, y_label: str, X_labels: List[str], beta):  
+        
+        print('COMPUTE - 1')
+        
         _data = self.data
         _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
         missing_cols = list(self.category_expressions - set(_data.columns))
         _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
+        print('COMPUTE - 2')
         if '__ord__' in y_label:
             y_label, cutoff = y_label.split('__ord__')
             _data = _data.with_columns(pl.when(pl.col(y_label) <= int(cutoff))
                                     .then(pl.lit(1.0))
                                     .otherwise(pl.lit(0.0))
                                     .alias(y_label))
+        print('COMPUTE - 3')
         return self._compute(_data, y_label, X_labels, beta)
         
     def _compute(self, data, y_label: str, X_labels: List[str], beta):
@@ -532,7 +537,7 @@ class Client:
         X['__const'] = 1
         X = X.to_numpy().astype(float)
         #X = sm.tools.add_constant(X) 
-        
+        print('COMPUTE - 4')
         #print(len(self.data))
         #print(y_label, X_labels)
         #print(data.head(1))
@@ -542,8 +547,11 @@ class Client:
         y = y.to_numpy().astype(float)
         
         do_log_reg = y_label in self.get_categories() or (y_label in self.schema and self.schema[y_label] == VariableType.ORDINAL)
+        print('COMPUTE - 5')
         
         result = self._run_regression(y,X,beta,do_log_reg)
+        
+        print('COMPUTE - 99')
         
         return result
         
@@ -554,6 +562,7 @@ class Client:
         else:
             glm_model = sm.GLM(y, X, family=family.Gaussian())
         #normalized_cov_params = np.linalg.inv(X.T.dot(X)) # singular matrix problem with missing cat_1 in data slices
+        print('COMPUTE - 6')
         glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
         
         #print(beta)
@@ -567,6 +576,8 @@ class Client:
         
         deviance = glm_results.deviance
         
+        print('COMPUTE - 7')
+        
         # delta g' is derivative of inverse link function
         derivative_inverse_link = glm_results.family.link.inverse_deriv
         dmu_deta = derivative_inverse_link(eta)
@@ -577,11 +588,20 @@ class Client:
         z = eta + (y - mu)/dmu_deta
         W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
         
+        print('COMPUTE - 8')
         
-        r1 = X.T @ W @ X
-        r2 = X.T @ W @ z
+        
+        xw = X.T @ W
+        
+        print('COMPUTE - 8.1')
+        
+        xwx = xw @ X
+        print('COMPUTE - 8.2')
+        xwz = xw @ z
+        
+        print('COMPUTE - 8.3')
     
-        return r1, r2, deviance, llf, rss, len(y)
+        return xwx, xwz, deviance, llf, rss, len(y)
     
     
     

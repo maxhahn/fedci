@@ -29,8 +29,8 @@ class TestingRound:
         self.tikhonov_lambda = tikhonov_lambda
         self._init_beta0()
         self.client_data = {
-            'xtx': [],
-            'xtz': [],
+            'xwx': [],
+            'xwz': [],
             'dev': [],
             'llf': [],
             'rss': [],
@@ -72,11 +72,11 @@ class TestingRound:
         self.providing_clients = set(results.keys())
         
         client_data = [[(k,vi) for vi in v] for k,v in results.items()]
-        xtx, xtz, dev, llf, rss, nobs = zip(*client_data)
-        xtx, xtz, dev, llf, rss, nobs = dict(xtx), dict(xtz), dict(dev), dict(llf), dict(rss), dict(nobs)
+        xwx, xwz, dev, llf, rss, nobs = zip(*client_data)
+        xwx, xwz, dev, llf, rss, nobs = dict(xwx), dict(xwz), dict(dev), dict(llf), dict(rss), dict(nobs)
         
-        self.client_data['xtx'] = xtx
-        self.client_data['xtz'] = xtz
+        self.client_data['xwx'] = xwx
+        self.client_data['xwz'] = xwz
         self.client_data['dev'] = dev
         self.client_data['llf'] = llf
         self.client_data['rss'] = rss
@@ -86,17 +86,17 @@ class TestingRound:
     def aggregate_results(self, results):
         self.update_state(results)
         
-        xtx = self.client_data['xtx']  
-        xtz = self.client_data['xtz']  
+        xwx = self.client_data['xwx']  
+        xwz = self.client_data['xwz']  
         dev = self.client_data['dev']  
         llf = self.client_data['llf']  
         rss = self.client_data['rss']  
         nobs = self.client_data['nobs']
         
-        xtx_agg = sum(xtx.values())
-        xtx_agg = xtx_agg + self.tikhonov_lambda*np.eye(xtx_agg.shape[0]) # tikhonov/ridge regularization
+        xwx_agg = sum(xwx.values())
+        xwx_agg = xwx_agg + self.tikhonov_lambda*np.eye(xwx_agg.shape[0]) # tikhonov/ridge regularization
         
-        self.beta = np.linalg.inv(xtx_agg) @ sum(xtz.values())
+        self.beta = np.linalg.inv(xwx_agg) @ sum(xwz.values())
         self.last_deviance = self.deviance
         self.deviance = sum(dev.values())
         self.llf = sum(llf.values())
@@ -513,7 +513,7 @@ class Client:
         
         probas = probas1 - probas0
         probas = np.take(probas, cat_association)
-        probas = np.clip(probas, a_min=1e-10, a_max=None)
+        #probas = np.clip(probas, a_min=1e-10, a_max=None) # CLIPPING APPROACH
         llf = np.sum(np.log(probas))
         
         # LOGITS APPROACH
