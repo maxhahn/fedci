@@ -629,7 +629,6 @@ def provide_fedglm_data(room, fedglm_status):
         beta = deserialize_numpy_array(fedglm_status['current_beta'])
         y_label  = fedglm_status['y_label']
         X_labels = fedglm_status['X_labels']
-        
 
         fedglm_result = fedglm_client.compute(y_label, X_labels, beta)
         
@@ -714,7 +713,7 @@ def step_show_room_details():
     
     st.write(f"<sup>Room protocol: {st.session_state['current_room']['algorithm']}<sup>", unsafe_allow_html=True)
     
-    spinner_placeholder = st.empty()
+    #spinner_placeholder = st.empty()
     
     _, col1, col2, col3, col4, col5, _ = st.columns((1,1,1,1,1,1,1))
         
@@ -843,15 +842,15 @@ def step_show_room_details():
         if not hasattr(fedglm_client, 'category_expressions'):
             fedglm_client.receive_category_expressions(room['user_provided_categorical_expressions'])
          
-        # TODO: fix flashing during fast processing   
+        # TODO: fix flashing during fast processing  !!!
         #@st.fragment()
         #def frag_func(room, fedglm_status):
         #    with st.spinner(f'Running regression:  {fedglm_status["y_label"]} ~ {", ".join(fedglm_status["X_labels"] + ["1"])}'):
         #        provide_fedglm_data(room, fedglm_status) 
-        with spinner_placeholder:
+        #with spinner_placeholder:
             #frag_func(room, fedglm_status)
-            with st.spinner(f'Running regression:  {fedglm_status["y_label"]} ~ {", ".join(fedglm_status["X_labels"] + ["1"])}'):
-                provide_fedglm_data(room, fedglm_status)            
+        #    with st.spinner(f'Running regression:  {fedglm_status["y_label"]} ~ {", ".join(fedglm_status["X_labels"] + ["1"])}'):
+        provide_fedglm_data(room, fedglm_status)            
     
     return
 

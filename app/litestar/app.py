@@ -607,13 +607,14 @@ async def join_room(data: JoinRoomRequest, room_name: str) -> Response:
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if data.username in user2room:
         raise HTTPException(detail='You are already assigned a room', status_code=403)
-    if connections[data.id].data is None:
-        raise HTTPException(detail='You have to upload data before joining a room', status_code=403)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
     
-    
     room = rooms[room_name]
+    
+    if room.algorithm == Algorithm.P_VALUE_AGGREGATION and connections[data.id].data is None:
+        raise HTTPException(detail='You have to upload data before joining a room', status_code=403)
+
     
     if room.is_locked:
         raise HTTPException(detail='The room is locked', status_code=403)
@@ -934,6 +935,8 @@ def _provide_fed_glm_data(data, room_name) -> Response:
     if room.algorithm_state == AlgorithmState.RUNNING:
         curr_testing_round = current_engine.get_current_test()
         
+        #print(f'Running {curr_testing_round}')
+        
         # ALL DATA HAS BEEN PROVIDED
         required_labels = curr_testing_round.get_required_labels()    
         required_labels = get_base_labels(required_labels, reversed_categorical_expressions, reversed_ordinal_expressions)
@@ -947,6 +950,7 @@ def _provide_fed_glm_data(data, room_name) -> Response:
         
     elif room.algorithm_state == AlgorithmState.FIX_CATEGORICALS or room.algorithm_state == AlgorithmState.FIX_ORDINALS:
         _, pending_data, _ = current_engine.get_current_test()
+        #print(f'Running fixup {pending_data}')
         room.federated_glm.pending_data = pending_data
         room.federated_glm.start_of_last_iteration = datetime.datetime.now()
 
@@ -967,7 +971,7 @@ def _provide_fed_glm_data(data, room_name) -> Response:
         # TODO: BUILD PANDAS DF data with columns for IOD -> X,Y,S,p_value (check again)
         # THEN CALL rIOD
         
-        all_labels = [li for l in room.user_provided_labels.values() for li in l]
+        all_labels = list(set([li for l in room.user_provided_labels.values() for li in l]))
         
         columns = ('ord', 'X', 'Y', 'S', 'pvalue')
         rows = []
@@ -1045,7 +1049,7 @@ def run_fed_glm(room_name):
     available_labels = set([vi for v in room.user_provided_labels.values() for vi in v])
     categorical_expressions, reversed_categorical_expressions, ordinal_expressions, reversed_ordinal_expressions = get_categorical_and_ordinal_expressions_with_reverse(room)
 
-    testing_engine = fedci.TestingEngine(available_labels, categorical_expressions, ordinal_expressions)
+    testing_engine = fedci.TestingEngine(available_labels, categorical_expressions, ordinal_expressions, max_regressors=None)
     required_labels = testing_engine.get_current_test().get_required_labels()
     required_labels = get_base_labels(required_labels, reversed_categorical_expressions, reversed_ordinal_expressions)
     
