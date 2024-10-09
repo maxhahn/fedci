@@ -10,6 +10,7 @@ import statsmodels.api as sm
 from statsmodels.genmod.generalized_linear_model import GLMResults
 from statsmodels.genmod.families import family
 import scipy
+from scipy import stats
 
 
 class VariableType(enum.Enum):
@@ -514,21 +515,18 @@ class Client:
     #     return self._compute(_data, y_label, X_labels, beta)
         
     def compute(self, y_label: str, X_labels: List[str], beta):  
-        
-        print('COMPUTE - 1')
-        
         _data = self.data
         _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
         missing_cols = list(self.category_expressions - set(_data.columns))
         _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
-        print('COMPUTE - 2')
+
         if '__ord__' in y_label:
             y_label, cutoff = y_label.split('__ord__')
             _data = _data.with_columns(pl.when(pl.col(y_label) <= int(cutoff))
                                     .then(pl.lit(1.0))
                                     .otherwise(pl.lit(0.0))
                                     .alias(y_label))
-        print('COMPUTE - 3')
+
         return self._compute(_data, y_label, X_labels, beta)
         
     def _compute(self, data, y_label: str, X_labels: List[str], beta):
@@ -537,7 +535,6 @@ class Client:
         X['__const'] = 1
         X = X.to_numpy().astype(float)
         #X = sm.tools.add_constant(X) 
-        print('COMPUTE - 4')
         #print(len(self.data))
         #print(y_label, X_labels)
         #print(data.head(1))
@@ -547,11 +544,8 @@ class Client:
         y = y.to_numpy().astype(float)
         
         do_log_reg = y_label in self.get_categories() or (y_label in self.schema and self.schema[y_label] == VariableType.ORDINAL)
-        print('COMPUTE - 5')
         
         result = self._run_regression(y,X,beta,do_log_reg)
-        
-        print('COMPUTE - 99')
         
         return result
         
@@ -562,7 +556,7 @@ class Client:
         else:
             glm_model = sm.GLM(y, X, family=family.Gaussian())
         #normalized_cov_params = np.linalg.inv(X.T.dot(X)) # singular matrix problem with missing cat_1 in data slices
-        print('COMPUTE - 6')
+
         glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
         
         #print(beta)
@@ -576,8 +570,6 @@ class Client:
         
         deviance = glm_results.deviance
         
-        print('COMPUTE - 7')
-        
         # delta g' is derivative of inverse link function
         derivative_inverse_link = glm_results.family.link.inverse_deriv
         dmu_deta = derivative_inverse_link(eta)
@@ -588,18 +580,9 @@ class Client:
         z = eta + (y - mu)/dmu_deta
         W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
         
-        print('COMPUTE - 8')
-        
-        
         xw = X.T @ W
-        
-        print('COMPUTE - 8.1')
-        
         xwx = xw @ X
-        print('COMPUTE - 8.2')
         xwz = xw @ z
-        
-        print('COMPUTE - 8.3')
     
         return xwx, xwz, deviance, llf, rss, len(y)
     
@@ -728,3 +711,354 @@ def get_symmetric_likelihood_tests(finished_rounds, from_asymmetric_tests=True):
         tests.append(SymmetricLikelihoodRatioTest(test, swapped_test))
         
     return tests
+
+
+
+###
+# LIKELIHOOD RATIO TEST HELPER
+###
+
+class EmptyLikelihoodRatioTest(LikelihoodRatioTest):
+    def __init__(self, y_label, x_label, s_labels, p_val):
+        self.y_label = y_label
+        self.x_label = x_label
+        self.s_labels = s_labels
+        self.p_val = p_val
+        
+class CategoricalLikelihoodRatioTest(LikelihoodRatioTest):
+    def __init__(self, y_label, t0s, t1s, num_cats):
+        assert len(t0s) > 0
+        assert len(t1s) > 0
+        assert len(t0s[0].X_labels) + 1 == len(t1s[0].X_labels)
+        # TODO: assert more data integrity
+        #assert t0s[0].y_label == t1s[0].y_label
+        
+        self.y_label = y_label
+        self.x_label = (set(t1s[0].X_labels) - set(t0s[0].X_labels)).pop()
+        self.s_labels = t0s[0].X_labels
+        self.p_val = self._run_likelihood_test(t0s, t1s, num_cats)
+        self.p_val = round(self.p_val, 4)
+        
+    def _run_likelihood_test(self, t0s, t1s, num_cats):
+        
+        # t1 should always encompass more regressors -> less client can fulfill this
+        #assert len(self.t1.providing_clients) < len(self.t0.providing_clients)
+        
+        providing_clients = t1s[0].providing_clients
+        
+        t0_llf = sum([t.get_fit_stats(providing_clients)['llf'] for t in t0s])
+        t1_llf = sum([t.get_fit_stats(providing_clients)['llf'] for t in t1s])
+        
+        # d_y = num cats
+        # DOF Z = size cond set
+        # DOF X = 1
+        t0_dof = (num_cats-1)*(len(self.s_labels)+1) # (d_y - 1)*(DOF(Z)+1)
+        t1_dof = (num_cats-1)*(len(self.s_labels)+2) # (d_y - 1)*(DOF(Z)+DOF(X)+1)
+        t = -2*(t0_llf - t1_llf)
+        
+        p_val = stats.chi2.sf(t, t1_dof-t0_dof)
+        
+        return p_val
+    
+class OrdinalLikelihoodRatioTest(LikelihoodRatioTest):
+    def __init__(self, y_label, t0s, t1s, num_cats):
+        assert len(t0s) > 0
+        assert len(t1s) > 0
+        #assert len(t0s) == len(t1s)
+        assert len(t0s[0].X_labels) + 1 == len(t1s[0].X_labels)
+        # TODO: assert more data integrity
+        #assert t0s[0].y_label == t1s[0].y_label
+        
+        t0s = sorted(t0s, key=lambda x: int(x.y_label.split('__ord__')[-1]))
+        t1s = sorted(t1s, key=lambda x: int(x.y_label.split('__ord__')[-1]))
+        
+        self.y_label = y_label
+        self.x_label = (set(t1s[0].X_labels) - set(t0s[0].X_labels)).pop()
+        self.s_labels = t0s[0].X_labels        
+        self.p_val = self._run_likelihood_test(t0s, t1s, num_cats)
+        self.p_val = round(self.p_val, 4)
+        
+    def _run_likelihood_test(self, t0s, t1s, num_cats):
+        
+        # t1 should always encompass more regressors -> less client can fulfill this
+        #assert len(self.t1.providing_clients) < len(self.t0.providing_clients)
+        
+        providing_clients = t1s[0].providing_clients
+        
+        t0_llf = sum([t.get_fit_stats(providing_clients)['llf'] for t in t0s])
+        t1_llf = sum([t.get_fit_stats(providing_clients)['llf'] for t in t1s])
+        
+        # d_y = num cats
+        # DOF Z = size cond set
+        # DOF X = 1
+        t0_dof = (num_cats-1)*(len(self.s_labels)+1) # (d_y - 1)*(DOF(Z)+1)
+        t1_dof = (num_cats-1)*(len(self.s_labels)+2) # (d_y - 1)*(DOF(Z)+DOF(X)+1)
+        t = -2*(t0_llf - t1_llf)
+        
+        p_val = stats.chi2.sf(t, t1_dof-t0_dof)
+        
+        return p_val
+
+def join_categories_in_regression_sets(tests, reversed_category_expressions):
+    #updated_tests = []
+    for test in tests:
+        test.X_labels = sorted(list(set([reversed_category_expressions[l] if l in reversed_category_expressions else l for l in test.X_labels])))
+    return tests
+
+def group_categorical_likelihood_tests(tests, category_expressions, reversed_category_expressions):
+    #category_expressions = servers['dag_chain4_1c'].category_expressions
+    #reversed_category_expressions = servers['dag_chain4_1c'].reversed_category_expressions
+    #tests = server_ci_tests['dag_chain4_1c']
+
+    updated_tests = []
+    for test in tests:
+        if test.y_label not in reversed_category_expressions:
+            updated_tests.append(test)
+            continue
+        
+        category_label = reversed_category_expressions[test.y_label]
+        
+        # Only run if the current test is the first category. This avoids duplicate tests
+        if category_expressions[category_label][0] != test.y_label:
+            continue
+        
+        categorical_test_group = []
+        for test_lookup in tests:
+            if test_lookup.y_label in category_expressions[category_label] and test_lookup.x_label == test.x_label and sorted(test_lookup.s_labels) == sorted(test.s_labels):
+                categorical_test_group.append(test_lookup)
+                
+        lrt = CategoricalLikelihoodRatioTest(category_label, [t.t0 for t in categorical_test_group], [t.t1 for t in categorical_test_group], len(category_expressions[category_label]))
+        updated_tests.append(lrt)
+        
+    return updated_tests
+
+
+def group_ordinal_likelihood_tests(tests, ordinal_expressions, reversed_ordinal_expressions):
+    #category_expressions = servers['dag_chain4_1c'].category_expressions
+    #reversed_category_expressions = servers['dag_chain4_1c'].reversed_category_expressions
+    #tests = server_ci_tests['dag_chain4_1c']
+
+    updated_tests = []
+    for test in tests:
+        if test.y_label not in reversed_ordinal_expressions:
+            updated_tests.append(test)
+            continue
+        
+        category_label = reversed_ordinal_expressions[test.y_label]
+        #print(category_label)
+        
+        # Only run if the current test is the first category. This avoids duplicate tests
+        if ordinal_expressions[category_label][0] != test.y_label:
+            continue
+        
+        categorical_test_group = []
+        for test_lookup in tests:
+            if test_lookup.y_label in ordinal_expressions[category_label] and test_lookup.x_label == test.x_label and sorted(test_lookup.s_labels) == sorted(test.s_labels):
+                categorical_test_group.append(test_lookup)
+                
+        lrt = OrdinalLikelihoodRatioTest(category_label, [t.t0 for t in categorical_test_group], [t.t1 for t in categorical_test_group], len(ordinal_expressions[category_label]))
+        updated_tests.append(lrt)
+        
+    return updated_tests
+
+def get_test_results(tests,
+                        category_expressions,
+                        reversed_category_expressions,
+                        ordinal_expressions,
+                        reversed_ordinal_expressions,
+                        do_symmetric_tests=True
+                        ):
+    tests = join_categories_in_regression_sets(tests, reversed_category_expressions)
+    likelihood_tests = get_likelihood_tests(tests)
+    
+    likelihood_tests = group_categorical_likelihood_tests(likelihood_tests, category_expressions, reversed_category_expressions)
+    likelihood_tests = group_ordinal_likelihood_tests(likelihood_tests, ordinal_expressions, reversed_ordinal_expressions)
+    
+    if do_symmetric_tests:
+        likelihood_tests = get_symmetric_likelihood_tests(likelihood_tests)
+        
+    return likelihood_tests
+
+
+###
+# FIXUP ENGINE
+###
+
+class FixupEngine:
+    def __init__(self,
+                 testing_engine,
+                 user_provided_labels,
+                 user_provided_categorical_expressions,
+                 variable_expressions,
+                 reversed_category_expressions,
+                 reversed_ordinal_expressions):
+        self.fixups = []
+        self.testing_engine = testing_engine
+        self.user_provided_labels = user_provided_labels
+        self.user_provided_categorical_expressions = user_provided_categorical_expressions
+        self.variable_expressions = variable_expressions
+        self.reversed_category_expressions = reversed_category_expressions
+        self.reversed_ordinal_expressions = reversed_ordinal_expressions
+        self.is_finished = None
+        
+    def get_current_test(self):
+        if len(self.fixups) > 0:
+            return self.fixups[0]
+        return None
+    
+    def aggregate_results(self, results):
+        test_to_update, _, _ = self.get_current_test()
+        test_to_update.update_llf(results)
+        self.fixups.pop(0)
+        if len(self.fixups) == 0:
+            self.is_finished = True
+    
+    def __extend_labels(self, ls, category_expressions):
+        new_ls = []
+        for l in ls:
+            if l in category_expressions:
+                new_ls.extend(category_expressions[l])
+            else:
+                new_ls.append(l)
+        return new_ls 
+    
+    def _fill_categorical_test_fixup(self,
+                                    testing_engine,
+                                    user_provided_labels,
+                                    user_provided_categorical_expressions,
+                                    category_expressions,
+                                    reversed_category_expressions,
+                                    reversed_ordinal_expressions):
+        def _get_llfs(t0, t_ref):            
+            required_labels = []            
+            for label in [t0.y_label] + t0.X_labels:
+                if label in reversed_category_expressions:
+                    #client_labels.append(self.reversed_category_expressions[label])
+                    required_labels.append(label)
+                elif label in reversed_ordinal_expressions:
+                    required_labels.append(reversed_ordinal_expressions[label])
+                else:
+                    required_labels.append(label)        
+                    
+            
+            # print('DATA ---')
+            # print(t0)
+            # print(t_ref)
+            # print(user_provided_labels)
+            # print(user_provided_categorical_expressions)
+            # print(required_labels)
+            # l,c = user_provided_labels.items()[0]
+            # print(self.__extend_labels(l, user_provided_categorical_expressions[c]))
+            # basically same as regular comparison if a client has the required_labels, however here the labels of the client are extended to their categorical forms, as this is required to fix the categorical llfs
+            pending_data = {client:None for client, labels in user_provided_labels.items()
+                            if all([required_label in self.__extend_labels(labels, user_provided_categorical_expressions[client]) for required_label in required_labels])}
+            #selected_clients = {id_: c for id_, c in clients.items() if set(required_labels).issubset(extend_labels(c.labels, room))}
+            
+            assert len(pending_data) > 0, f'Their has to be at least one client who has the required labels: {required_labels}'
+            
+            return pending_data, (t0.X_labels, t0.y_label, t_ref.y_label, t0.beta, t_ref.beta)
+        
+        for categorical_key, categorical_values in category_expressions.items():
+            all_categorical_tests = testing_engine.get_finished_tests_by_y_label(categorical_values)
+            categorical_test_x_label_mapping = {}
+            for t in all_categorical_tests:
+                x_label_key = tuple(sorted(list(t.X_labels)))
+                if x_label_key not in categorical_test_x_label_mapping:
+                    categorical_test_x_label_mapping[x_label_key] = []
+                categorical_test_x_label_mapping[x_label_key].append(t)
+                
+            for x_label_key, categorical_tests in categorical_test_x_label_mapping.items():
+                #print('LLFs Before', [t.llf for t in categorical_tests])
+                for i in range(len(categorical_tests)-1): 
+                    pending_data, test_specifics = _get_llfs(categorical_tests[i], categorical_tests[-1])
+                    test_to_update = categorical_tests[i]
+                    
+                    self.fixups.append((test_to_update, pending_data, test_specifics))
+                    #categorical_tests[i].update_llf(results)
+                    
+                    
+    def _fill_ordinal_test_fixup(self,
+                                testing_engine,
+                                user_provided_labels,
+                                user_provided_categorical_expressions,
+                                ordinal_expressions,
+                                reversed_category_expressions,
+                                reversed_ordinal_expressions):
+        def _get_llfs(t0, t1):
+            if t1 is None:
+                t1_y = None
+                t1_b = None
+                occuring_labels = [t0.y_label] + t0.X_labels
+            else:
+                t1_y = t1.y_label
+                t1_b = t1.beta
+                occuring_labels = [t1.y_label] + t1.X_labels
+            
+            required_labels = []            
+            for label in occuring_labels:
+                if label in reversed_category_expressions:
+                    #client_labels.append(self.reversed_category_expressions[label])
+                    required_labels.append(label)
+                elif label in reversed_ordinal_expressions:
+                    required_labels.append(reversed_ordinal_expressions[label])
+                else:
+                    required_labels.append(label)      
+                                  
+            pending_data = {client:None for client, labels in user_provided_labels.items()
+                            if all([required_label in self.__extend_labels(labels, user_provided_categorical_expressions[client]) for required_label in required_labels])}
+            
+            assert len(pending_data) > 0, f'Their has to be at least one client who has the required labels: {required_labels}'
+            
+            return pending_data, (t0.X_labels, t0.y_label, t1_y, t0.beta, t1_b)
+        
+        for ordinal_key, ordinal_values in ordinal_expressions.items():
+            all_ordinal_tests = testing_engine.get_finished_tests_by_y_label(ordinal_values)
+            ordinal_test_x_label_mapping = {}
+            for t in all_ordinal_tests:
+                x_label_key = tuple(sorted(list(t.X_labels)))
+                if x_label_key not in ordinal_test_x_label_mapping:
+                    ordinal_test_x_label_mapping[x_label_key] = []
+                ordinal_test_x_label_mapping[x_label_key].append(t)
+                
+            for x_label_key, ordinal_tests in ordinal_test_x_label_mapping.items():
+                
+                ordinal_tests = sorted(ordinal_tests, key=lambda x: int(x.y_label.split('__ord__')[-1]))
+                for i in range(1,len(ordinal_tests)):    
+                    pending_data, test_specifics = _get_llfs(ordinal_tests[i-1], ordinal_tests[i])
+                    test_to_update = ordinal_tests[i]
+                    
+                    self.fixups.append((test_to_update, pending_data, test_specifics))
+                    #ordinal_tests[i].update_llf(results)
+
+                pending_data, test_specifics = _get_llfs(ordinal_tests[-1], None)
+                test_to_update = ordinal_tests[-1]
+                    
+                self.fixups.append((test_to_update, pending_data, test_specifics))
+                #ordinal_tests[-1].update_llf(results)
+                
+                
+class FixupCategoricalsEngine(FixupEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._fill_categorical_test_fixup(self.testing_engine,
+                                      self.user_provided_labels,
+                                      self.user_provided_categorical_expressions,
+                                      self.variable_expressions,
+                                      self.reversed_category_expressions,
+                                      self.reversed_ordinal_expressions)
+        
+        self.is_finished = len(self.fixups) == 0
+
+class FixupOrdinalsEngine(FixupEngine):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        self._fill_ordinal_test_fixup(self.testing_engine,
+                                      self.user_provided_labels,
+                                      self.user_provided_categorical_expressions,
+                                      self.variable_expressions,
+                                      self.reversed_category_expressions,
+                                      self.reversed_ordinal_expressions)
+        
+        self.is_finished = len(self.fixups) == 0

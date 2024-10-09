@@ -1,7 +1,7 @@
 from dataclasses import dataclass, asdict
 from enum import Enum
 
-from typing import List, Dict, Set, Optional, Tuple
+from typing import List, Dict, Set, Optional, Tuple, Union
 
 from litestar import Litestar, MediaType, Response, post, get
 from litestar.exceptions import HTTPException
@@ -66,6 +66,12 @@ class Algorithm(str, Enum):
     P_VALUE_AGGREGATION = 'IOD'
     FEDERATED_GLM = 'FEDGLM'
     
+class AlgorithmState(str, Enum):
+    RUNNING = 'RUNNING'
+    FIX_CATEGORICALS = 'FIX_CATEGORICALS'
+    FIX_ORDINALS = 'FIX_ORDINALS'
+    FINISHED = 'FINISHED'
+    
 @dataclass
 class Connection:
     id: str
@@ -116,9 +122,45 @@ class FederatedGLMTesting:
     start_of_last_iteration: datetime.datetime
     
 @dataclass
+class FederatedGLMFixupTesting(FederatedGLMTesting):
+    fixup_engine: object
+    
+    def __init__(self, testing_engine: fedci.TestingEngine, room, variable_type):
+        self.testing_engine = testing_engine
+        
+        ce, rce, oe, roe = get_categorical_and_ordinal_expressions_with_reverse(room)
+        
+        if variable_type == 'categorical':
+            self.fixup_engine = fedci.FixupCategoricalsEngine(testing_engine,
+                                                              room.user_provided_labels,
+                                                              room.user_provided_categorical_expressions,
+                                                              ce,
+                                                              rce,
+                                                              roe
+                                                              )
+            pass
+        elif variable_type == 'ordinal':
+            self.fixup_engine = fedci.FixupOrdinalsEngine(testing_engine,
+                                                          room.user_provided_labels,
+                                                          room.user_provided_categorical_expressions,
+                                                          oe,
+                                                          rce,
+                                                          roe
+                                                          )
+        else:
+            assert False, f'Unknown variable type: {variable_type}'
+            
+        if self.fixup_engine.get_current_test() is None:
+            raise Exception('Should not be called, when there are no tests to fix')
+        self.pending_data = self.fixup_engine.get_current_test()[1]
+        self.start_of_last_iteration = datetime.datetime.now()
+        
+    
+@dataclass
 class Room:
     name: str
     algorithm: Algorithm
+    algorithm_state: AlgorithmState
     owner_name: str
     password: str
     is_locked: bool
@@ -169,31 +211,57 @@ class FederatedGLMStatus:
         testing_round: fedci.TestingRound = glm_testing_state.testing_engine.testing_rounds[0] # todo: might cause errors
         self.y_label = testing_round.y_label
         self.X_labels = testing_round.X_labels
-        self.is_awaiting_response = requesting_user is not None and glm_testing_state.pending_data.get(requesting_user) is None
+        self.is_awaiting_response = requesting_user is not None and requesting_user in glm_testing_state.pending_data and glm_testing_state.pending_data.get(requesting_user) is None
         self.current_beta = serialize_numpy_array(testing_round.beta)
         self.current_iteration = testing_round.iterations
         self.current_relative_change_in_deviance = testing_round.get_relative_change_in_deviance()
         self.start_of_last_iteration = glm_testing_state.start_of_last_iteration
         
 @dataclass
+class FederatedGLMFixupStatus(FederatedGLMStatus):
+    y_label_compare: Optional[str]
+    current_beta_compare: Optional[object]
+    
+    def __init__(self, glm_testing_state: FederatedGLMFixupTesting, requesting_user: str):
+        fixup_round = glm_testing_state.fixup_engine.get_current_test()
+        
+        if fixup_round is None:
+            raise Exception('Dont call this when engine is done')
+        
+        _, _, (X_labels, y_label0, y_label1, beta0, beta1) = fixup_round
+
+        self.y_label = y_label0
+        self.current_beta = serialize_numpy_array(beta0)
+        
+        self.y_label_compare = y_label1
+        self.current_beta_compare = serialize_numpy_array(beta1) if beta1 is not None else None
+        
+        self.X_labels = X_labels
+        
+        self.is_awaiting_response = requesting_user is not None and requesting_user in glm_testing_state.pending_data and glm_testing_state.pending_data.get(requesting_user) is None
+        self.start_of_last_iteration = glm_testing_state.start_of_last_iteration
+        
+@dataclass
 class RoomDTO:
     name: str
     algorithm: Algorithm
+    algorithm_state: AlgorithmState
     owner_name: str
     is_locked: bool
     is_protected: bool
     def __init__(self, room: Room):
         self.name = room.name
         self.algorithm = room.algorithm
+        self.algorithm_state = room.algorithm_state
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
-        self.is_protected = room.password is not None
-        
+        self.is_protected = room.password is not None    
         
 @dataclass
 class RoomDetailsDTO:
     name: str
     algorithm: Algorithm
+    algorithm_state: AlgorithmState
     owner_name: str
     is_locked: bool
     is_hidden: bool
@@ -213,6 +281,7 @@ class RoomDetailsDTO:
     def __init__(self, room: Room, requesting_user: str=None):
         self.name = room.name
         self.algorithm = room.algorithm
+        self.algorithm_state = room.algorithm_state
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
         self.is_hidden = room.is_hidden
@@ -239,10 +308,12 @@ class RoomDetailsDTO:
         self.result_labels = room.result_labels
         self.private_result = room.user_results[requesting_user] if room.user_results is not None and requesting_user in room.user_results else None
         self.private_labels = room.user_labels[requesting_user] if room.user_labels is not None and requesting_user in room.user_labels else None
-        if room.federated_glm is None or room.federated_glm.testing_engine.is_finished:
+        if room.federated_glm is None or room.algorithm_state == AlgorithmState.FINISHED:
             self.federated_glm_status = None
-        else:
+        elif room.algorithm_state == AlgorithmState.RUNNING:
             self.federated_glm_status = FederatedGLMStatus(room.federated_glm, requesting_user)
+        else:
+            self.federated_glm_status = FederatedGLMFixupStatus(room.federated_glm, requesting_user)
         
 # ,------.                                      ,--.          
 # |  .--. ' ,---.  ,---. ,--.,--. ,---.  ,---.,-'  '-. ,---.  
@@ -287,11 +358,16 @@ class DataSubmissionRequest(BasicRequest):
 class IODExecutionRequest(BasicRequest):
     alpha: float
     
+    
 @dataclass
-class FedGLMDataProvidingRequest(BasicRequest):
+class BaseFedGLMRequest(BasicRequest):
     current_beta: object
     current_iteration: int
     data: FederatedGLMDataDTO
+    
+@dataclass
+class FixupFedGLMRequest(BasicRequest):
+    llf: float
     
 
 # ,------.            ,--.               ,---.   ,--.                         ,--.                                
@@ -497,6 +573,7 @@ async def create_room(data: RoomCreationRequest) -> Response:
     
     room = Room(name=new_room_name,
                 algorithm=Algorithm(data.algorithm),
+                algorithm_state=AlgorithmState.RUNNING,
                 owner_name=room_owner,
                 password=data.password,
                 is_locked=False,
@@ -757,12 +834,13 @@ def run_riod(data, alpha):
     with (ro.default_converter + pandas2ri.converter).context():
         lvs = []
         for user, df, labels in data:
-            #converting it into r object for passing into r function|
+            #converting it into r object for passing into r function
             d = [('citestResults', ro.conversion.get_conversion().py2rpy(df)), ('labels', ro.StrVector(labels))]
             od = OrderedDict(d)
             lv = ro.ListVector(od)
             lvs.append(lv)
             users.append(user)
+            
         result = aggregate_ci_results_f(lvs, alpha)
 
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
@@ -785,48 +863,38 @@ def run_iod(data, room_name):
         
     return run_riod(zip(participants, participant_data, participant_data_labels), alpha=data.alpha)
 
-# TODO: set max regressors
-# todo: should lock written data 
-# todo: verify if object is updated by reference or by value - reassigning to dict may not be required
-@post("/rooms/{room_name:str}/federated-glm-data")
-def provide_fed_glm_data(data: FedGLMDataProvidingRequest, room_name: str) -> Response:
+
+def _provide_fed_glm_data(data, room_name) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
     room = rooms[room_name]
     
-    print('Start ---')
-    
     if data.username not in room.federated_glm.pending_data.keys():
-        print('Exit --- Unrequired data')
-        print(data.username)
-        print(room.federated_glm)
         return Response(
             content='The provided data was not required',
             status_code=200
             )
         
-    print('Incoming request ---')
-    print(data)
-        
-    provided_beta = deserialize_numpy_array(data.current_beta)
-    provided_iteration = data.current_iteration
-        
-    curr_testing_round =  room.federated_glm.testing_engine.get_current_test()
-    curr_beta = curr_testing_round.beta
-    curr_iteration = curr_testing_round.iterations
-    print(provided_iteration, curr_iteration)
-    
-    # TODO: change beta comparison to work with provided_beta
-    # TODO numpy array comparison problem. BAD. Fix with np.eq or smth
-    if provided_iteration != curr_iteration: #provided_beta != curr_beta or 
+    # dont accept data from non-current iteration
+    if type(data) == BaseFedGLMRequest and data.current_iteration != room.federated_glm.testing_engine.get_current_test().iterations:
         return Response(
             content='The provided data was not usable in this iteration',
             status_code=200
             )
-
-    fedglm_data = FederatedGLMData(data.data)
+        
+    # handle requests depending on algorithm state
+    if type(data) == BaseFedGLMRequest and room.algorithm_state == AlgorithmState.RUNNING:
+        fedglm_data = FederatedGLMData(data.data)
+    elif type(data) == FixupFedGLMRequest and room.algorithm_state != AlgorithmState.RUNNING:
+        fedglm_data = data.llf
+    else:
+        return Response(
+                content='The provided data does not fit the currently requested data',
+                status_code=400
+                )
+        
     room.federated_glm.pending_data[data.username] = fedglm_data
     
     if any([v is None for v in room.federated_glm.pending_data.values()]):
@@ -837,34 +905,110 @@ def provide_fed_glm_data(data: FedGLMDataProvidingRequest, room_name: str) -> Re
                 status_code=200
                 )
         
-    fedglm_results = {k:tuple(asdict(d).values()) for k,d in room.federated_glm.pending_data.items()}
-    room.federated_glm.testing_engine.aggregate_results(fedglm_results)
+    if type(room.federated_glm) == FederatedGLMTesting:
+        current_engine = room.federated_glm.testing_engine
+        fedglm_results = {k:tuple(asdict(d).values()) for k,d in room.federated_glm.pending_data.items()}
+    elif type(room.federated_glm) == FederatedGLMFixupTesting:
+        current_engine = room.federated_glm.fixup_engine
+        fedglm_results = room.federated_glm.pending_data # already correct format
+    else:
+        raise Exception(f'Unknown Testing Engine type: {type(room.federated_glm)}')
     
-    curr_testing_round = room.federated_glm.testing_engine.get_current_test()
-    if curr_testing_round is not None:
-        _, reversed_categorical_expressions, _, reversed_ordinal_expressions = get_categorical_and_ordinal_expressions_with_reverse(room)
+    current_engine.aggregate_results(fedglm_results)
+    
+    categorical_expressions, reversed_categorical_expressions, ordinal_expressions, reversed_ordinal_expressions = get_categorical_and_ordinal_expressions_with_reverse(room)
+    
+    # HANDLE FINISHED ENGINE
+    if current_engine.is_finished and room.algorithm_state == AlgorithmState.RUNNING:
+        room.federated_glm = FederatedGLMFixupTesting(room.federated_glm.testing_engine, room, 'categorical')
+        room.algorithm_state = AlgorithmState.FIX_CATEGORICALS
+        current_engine = room.federated_glm.fixup_engine
+    if current_engine.is_finished and room.algorithm_state == AlgorithmState.FIX_CATEGORICALS:
+        room.federated_glm = FederatedGLMFixupTesting(room.federated_glm.testing_engine, room, 'ordinal')
+        room.algorithm_state = AlgorithmState.FIX_ORDINALS
+        current_engine = room.federated_glm.fixup_engine
+    if current_engine.is_finished and room.algorithm_state == AlgorithmState.FIX_ORDINALS:
+        room.algorithm_state = AlgorithmState.FINISHED
         
+    # AS LONG AS STATE NOT EQ TO FINISHED, THE ENGINE WILL PROVIDE A TEST
+    if room.algorithm_state == AlgorithmState.RUNNING:
+        curr_testing_round = current_engine.get_current_test()
+        
+        # ALL DATA HAS BEEN PROVIDED
         required_labels = curr_testing_round.get_required_labels()    
         required_labels = get_base_labels(required_labels, reversed_categorical_expressions, reversed_ordinal_expressions)
 
         pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
         
+        assert len(pending_data) > 0, f'There are no clients who can supply the labels: {required_labels}'
+        
         room.federated_glm.pending_data = pending_data
         room.federated_glm.start_of_last_iteration = datetime.datetime.now()
-    else:
-        # TODO: finish up fed glm and run FCI (probably better to create testing rounds on demand in tandem with running fci)
-        # todo: easier to just run all and calculate likelihood ratio tests.
         
-        # TODO: Next up: LIKELIHOOD RATIO TESTS
+    elif room.algorithm_state == AlgorithmState.FIX_CATEGORICALS or room.algorithm_state == AlgorithmState.FIX_ORDINALS:
+        _, pending_data, _ = current_engine.get_current_test()
+        room.federated_glm.pending_data = pending_data
+        room.federated_glm.start_of_last_iteration = datetime.datetime.now()
+
+    elif room.algorithm_state == AlgorithmState.FINISHED:
+        # COULD RUN TESTS ACCORDING TO FCI REQUIREMENTS - requires a lot of work
+        
+        # TODO: DO LIKELIHOOD RATIO TESTS
+        # TODO: RUN FCI
+        
+        # turn linear models into likelihood ratio tests
+        likelihood_ratio_tests = fedci.get_test_results(room.federated_glm.testing_engine.finished_rounds,
+                                                        categorical_expressions,
+                                                        reversed_categorical_expressions,
+                                                        ordinal_expressions,
+                                                        reversed_ordinal_expressions
+                                                        )
+        
+        # TODO: BUILD PANDAS DF data with columns for IOD -> X,Y,S,p_value (check again)
+        # THEN CALL rIOD
+        
+        all_labels = [li for l in room.user_provided_labels.values() for li in l]
+        
+        columns = ('ord', 'X', 'Y', 'S', 'pvalue')
+        rows = []
+        for test in likelihood_ratio_tests:
+            s_labels_string = ','.join(sorted([str(all_labels.index(l)+1) for l in test.s_labels]))
+            rows.append((len(test.s_labels), all_labels.index(test.x_label)+1, all_labels.index(test.y_label)+1, s_labels_string, test.p_val))
+
+        df = pd.DataFrame(data=rows, columns=columns)
+        
+        # TODO: add alpha configuration per request
+        
+        try:
+            result, result_labels, _, _ = run_riod([(None, df, all_labels)], alpha=0.05)
+        except:
+            raise HTTPException(detail='Failed to execute FCI', status_code=500)
+        
+        room.result = result
+        room.result_labels = result_labels
+    
         room.is_processing = False
         room.is_finished = True
-        
+    else:
+        raise Exception(f'Unknown State - {room.algorithm_state}')
+    
     rooms[room_name] = room
     
     return Response(
             content='The provided data was accepted',
             status_code=200
             )
+
+@post("/rooms/{room_name:str}/federated-glm-data-fixup")
+def provide_fed_glm_data_fixup(data: FixupFedGLMRequest, room_name: str) -> Response:
+    return _provide_fed_glm_data(data, room_name)
+
+# TODO: set max regressors
+# todo: should lock written data 
+# todo: verify if object is updated by reference or by value - reassigning to dict may not be required
+@post("/rooms/{room_name:str}/federated-glm-data")
+def provide_fed_glm_data(data: BaseFedGLMRequest, room_name: str) -> Response:
+    return _provide_fed_glm_data(data, room_name)
     
 # TODO: Make room details have more cols for owner - kick col and new avg. response time col
 
@@ -906,6 +1050,8 @@ def run_fed_glm(room_name):
     required_labels = get_base_labels(required_labels, reversed_categorical_expressions, reversed_ordinal_expressions)
     
     pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
+    
+    assert len(pending_data) > 0, f'There are no clients who can supply the labels: {required_labels}'
     
     room.federated_glm = FederatedGLMTesting(testing_engine=testing_engine,
                                              pending_data=pending_data,
@@ -998,5 +1144,6 @@ app = Litestar([
     hide_room,
     reveal_room,
     provide_fed_glm_data,
+    provide_fed_glm_data_fixup,
     run
     ])

@@ -617,40 +617,81 @@ def step_join_rooms():
 
 
 def provide_fedglm_data(room, fedglm_status):
-    st.session_state['do_autorefresh'] = False
-    
     if fedglm_status is None or not fedglm_status['is_awaiting_response']:
         return
     
+    st.session_state['do_autorefresh'] = False
+    
     # Get Client and run step
     fedglm_client = st.session_state['fedglm_client']
+    
+    if room['algorithm_state'] == 'RUNNING':
+        beta = deserialize_numpy_array(fedglm_status['current_beta'])
+        y_label  = fedglm_status['y_label']
+        X_labels = fedglm_status['X_labels']
         
-    beta = deserialize_numpy_array(fedglm_status['current_beta'])
-    y_label  = fedglm_status['y_label']
-    X_labels = fedglm_status['X_labels']
+
+        fedglm_result = fedglm_client.compute(y_label, X_labels, beta)
+        
+        # Unpack result and send request
+        fedglm_result = dict(zip(('xwx', 'xwz', 'dev', 'llf', 'rss', 'nobs'), fedglm_result))
+        
+        fedglm_result['xwx'] = serialize_numpy_array(fedglm_result['xwx'])
+        fedglm_result['xwz'] = serialize_numpy_array(fedglm_result['xwz'])
+        # response beta: fedglm_status['beta'], fedglm_status['current_iteration']
+        
+        payload = {
+            'id': st.session_state['server_provided_user_id'],
+            'username': st.session_state['username'],
+            'current_beta': fedglm_status['current_beta'],
+            'current_iteration': fedglm_status['current_iteration'],
+            'data': fedglm_result
+            }
+        
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/federated-glm-data', payload=payload)
+    elif room['algorithm_state'] == 'FIX_CATEGORICALS':
+        assert 'current_beta_compare' in fedglm_status, 'Incorrect state for FIX_CATEGORICALS'
+        
+        beta = deserialize_numpy_array(fedglm_status['current_beta'])
+        y_label  = fedglm_status['y_label']
+        beta_compare = deserialize_numpy_array(fedglm_status['current_beta_compare'])
+        y_label_compare  = fedglm_status['y_label_compare']
+        X_labels = fedglm_status['X_labels']
+        
+        llf = fedglm_client.compute_categorical_llf(X_labels, y_label, y_label_compare, beta, beta_compare)
+        
+        payload = {
+            'id': st.session_state['server_provided_user_id'],
+            'username': st.session_state['username'],
+            'llf': llf
+        }
+        
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/federated-glm-data-fixup', payload=payload)
+        
+    elif room['algorithm_state'] == 'FIX_ORDINALS':
+        assert 'current_beta_compare' in fedglm_status, 'Incorrect state for FIX_ORDINALS'
+        
+        beta = deserialize_numpy_array(fedglm_status['current_beta'])
+        y_label  = fedglm_status['y_label']
+        beta_compare = deserialize_numpy_array(fedglm_status['current_beta_compare']) if fedglm_status['current_beta_compare'] is not None else None
+        y_label_compare  = fedglm_status['y_label_compare']
+        X_labels = fedglm_status['X_labels']
+        
+        llf = fedglm_client.compute_ordinal_llf(X_labels, y_label, y_label_compare, beta, beta_compare)
+        
+        payload = {
+            'id': st.session_state['server_provided_user_id'],
+            'username': st.session_state['username'],
+            'llf': llf
+        }
+        
+        r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/federated-glm-data-fixup', payload=payload)  
+        
+    else:
+        st.session_state['do_autorefresh'] = True
+        return
+        
     
-    print(f'FEDGLM - Running model for {y_label} ~ {", ".join(X_labels)}, with beta {beta.tolist()}')
-    
-    fedglm_result = fedglm_client.compute(y_label, X_labels, beta)
-    
-    print(f'FEDGLM - Client LLF {fedglm_result[3]}')
-    
-    # Unpack result and send request
-    fedglm_result = dict(zip(('xwx', 'xwz', 'dev', 'llf', 'rss', 'nobs'), fedglm_result))
-    
-    fedglm_result['xwx'] = serialize_numpy_array(fedglm_result['xwx'])
-    fedglm_result['xwz'] = serialize_numpy_array(fedglm_result['xwz'])
-    # response beta: fedglm_status['beta'], fedglm_status['current_iteration']
-    
-    print(f'FEDGLM - Posting to server')
-    
-    r = post_to_server(url = f'{st.session_state["server_url"]}/rooms/{room["name"]}/federated-glm-data', payload={
-        'id': st.session_state['server_provided_user_id'],
-        'username': st.session_state['username'],
-        'current_beta': fedglm_status['current_beta'],
-        'current_iteration': fedglm_status['current_iteration'],
-        'data': fedglm_result
-        })
     
     if r is None:
             return
@@ -798,8 +839,6 @@ def step_show_room_details():
         if fedglm_status is None:
             raise Exception('FEDGLM STATUS CANNOT BE NONE IF ROOM IS PROCESSING')
         
-        print(f'ENTERING FEDGLM FUNCTION - room iteration {fedglm_status["current_iteration"]}')
-        
         fedglm_client = st.session_state['fedglm_client']
         if not hasattr(fedglm_client, 'category_expressions'):
             fedglm_client.receive_category_expressions(room['user_provided_categorical_expressions'])
@@ -845,15 +884,27 @@ def data2graph(data, labels):
 def step_view_results():
     room = st.session_state['current_room']
     result_graphs = [data2graph(d,l) for d,l in zip(room['result'], room['result_labels'])]
-    private_result_graph = data2graph(room['private_result'], room['private_labels'])
+    if room['private_result'] is not None:
+        t1, t2 = st.tabs(['Combined Results', 'Private Result'])
+        private_result_graph = data2graph(room['private_result'], room['private_labels'])
     
-    t1, t2 = st.tabs(['Combined Results', 'Private Result'])
-    
+        with t2:
+            _, col1, _ = st.columns((1,1,1))
+            col1.download_button(
+                    label="Download PAG",
+                    data=private_result_graph.pipe(format='png'),
+                    file_name="federated-private-pag.png",
+                    mime="image/png", use_container_width=True
+                )
+            col1.graphviz_chart(private_result_graph)
+    else:
+        t1 = st.container()
+            
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
         for file_name, data in [(f"federated-pag-{i}.png",g.pipe(format='png')) for i, g in enumerate(result_graphs)]:
             zip_file.writestr(file_name, data)
-            
+        
     with t1:
         _, col1, _ = st.columns((1,2,1))
         col1.download_button(
@@ -872,16 +923,6 @@ def step_view_results():
             )
             cols[i%3].graphviz_chart(g)
             cols[i%3].write('---')
-            
-    with t2:
-        _, col1, _ = st.columns((1,1,1))
-        col1.download_button(
-                label="Download PAG",
-                data=private_result_graph.pipe(format='png'),
-                file_name="federated-private-pag.png",
-                mime="image/png", use_container_width=True
-            )
-        col1.graphviz_chart(private_result_graph)
         
     # use visualization library to show images of pags as well
     return
