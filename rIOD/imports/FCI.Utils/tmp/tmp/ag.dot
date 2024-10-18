@@ -1,0 +1,10 @@
+digraph graphname {node [shape = oval];
+V1_1 [label= V1_1 ]
+V2_2 [label= V2_2 ]
+V3_3 [label= V3_3 ]
+V4_4 [label= V4_4 ]
+V1_1 -> V2_2 [color=black, dir=both,arrowhead=none, arrowtail=none];
+V1_1 -> V4_4 [color=black, dir=both,arrowhead=none, arrowtail=none];
+V2_2 -> V3_3 [color=black, dir=both,arrowhead=none, arrowtail=none];
+V3_3 -> V4_4 [color=black, dir=both,arrowhead=none, arrowtail=none];
+}

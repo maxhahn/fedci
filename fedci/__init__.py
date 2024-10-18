@@ -513,7 +513,7 @@ class Client:
         
         probas = probas1 - probas0
         probas = np.take(probas, cat_association)
-        #probas = np.clip(probas, a_min=1e-10, a_max=None) # CLIPPING APPROACH
+        probas = np.clip(probas, a_min=1e-10, a_max=None) # CLIPPING APPROACH
         llf = np.sum(np.log(probas))
         
         # LOGITS APPROACH
@@ -560,6 +560,8 @@ class Client:
         #print(data.head(1))
         #print(X)
         
+        #print(f'{y_label} ~ {X_labels}')
+        
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
         
@@ -572,8 +574,10 @@ class Client:
         
     def _run_regression(self, y, X, beta, do_log_reg):
         if do_log_reg:
+            #print('Running Binomial')
             glm_model = sm.GLM(y, X, family=family.Binomial())
         else:
+            #print('Running Gaussian')
             glm_model = sm.GLM(y, X, family=family.Gaussian())
         #normalized_cov_params = np.linalg.inv(X.T.dot(X)) # singular matrix problem with missing cat_1 in data slices
         glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
@@ -642,8 +646,11 @@ class LikelihoodRatioTest:
         
         t = -2*(t0_fit_stats['llf'] - t1_fit_stats['llf'])
         
-        par0 = len(self.t0.X_labels) + 1 # + intercept
-        par1 = len(self.t1.X_labels) + 1 # + intercept
+        par0 = len(self.t0.beta)#-1 + 1 # + intercept
+        par1 = len(self.t1.beta)#-1 + 1 # + intercept
+        
+        #print(f'X_labels for t0: {self.t0.X_labels}, {self.t0.beta}')
+        #print(f'X_labels for t1: {self.t1.X_labels}, {self.t1.beta}')
         
         p_val = scipy.stats.chi2.sf(t, par1-par0)
         
@@ -660,6 +667,7 @@ class LikelihoodRatioTest:
         rss1 = t1_fit_stats['rss']
         par0 = len(self.t0.X_labels) + 1 # X + intercept
         par1 = len(self.t1.X_labels) + 1 # X + intercept
+        
         nobs = t0_fit_stats['nobs']
         delta_rss = rss0 - rss1
         dfn = par1 - par0
