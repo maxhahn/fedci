@@ -543,7 +543,7 @@ class Client:
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
         
-        do_log_reg = y_label in self.get_categories() or (y_label in self.schema and self.schema[y_label] == VariableType.ORDINAL)
+        do_log_reg = y_label.split('__cat__')[0] in self.get_categories() or (y_label in self.schema and self.schema[y_label] == VariableType.ORDINAL)
         
         result = self._run_regression(y,X,beta,do_log_reg)
         
@@ -621,8 +621,8 @@ class LikelihoodRatioTest:
         
         t = -2*(t0_fit_stats['llf'] - t1_fit_stats['llf'])
         
-        par0 = len(self.t0.X_labels) + 1 # + intercept
-        par1 = len(self.t1.X_labels) + 1 # + intercept
+        par0 = len(self.t0.beta)# + 1 # + intercept
+        par1 = len(self.t1.beta)# + 1 # + intercept
         
         p_val = scipy.stats.chi2.sf(t, par1-par0)
         

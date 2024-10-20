@@ -66,6 +66,7 @@ class TestingRound:
     
     def update_llf(self, results):
         self.providing_clients = set(results.keys())
+        self.client_data['llf'] = results
         self.llf = sum(results.values())
     
     def update_state(self, results):
@@ -228,7 +229,8 @@ class Server:
             counter += 1
             
         # fix categorical tests
-        self.update_categorical_tests()
+        #self.update_categorical_tests()
+        self.update_categorical_tests2()
         # fix ordinal llfs
         self.update_ordinal_tests()
         
@@ -268,6 +270,9 @@ class Server:
                 #print('LLFs Before', [t.llf for t in categorical_tests])
                 for i in range(len(categorical_tests)-1):    
                     results = _get_llfs(categorical_tests[i], categorical_tests[-1])
+                    #print(f'Running...')
+                    #print(categorical_tests[i])
+                    #print(categorical_tests[i-1])
                     
                     #print(results)
                     #print('Updating', y_label, X_labels)
@@ -277,6 +282,59 @@ class Server:
                 #results = _get_llfs(categorical_tests[-1], None)
                 #categorical_tests[-1].update_llf(results)
                 #print('LLFs After', [t.llf for t in categorical_tests])
+      
+    def update_categorical_tests2(self):
+        def _get_llfs(y_label, X_labels, betas):
+            client_labels = []          
+            req_labels = [y_label] + X_labels #if len(X_labels) > 0 else [y_label]  
+            for label in req_labels:
+                if label in self.reversed_category_expressions:
+                    #client_labels.append(self.reversed_category_expressions[label])
+                    client_labels.append(label)
+                elif label in self.reversed_ordinal_expressions:
+                    client_labels.append(self.reversed_ordinal_expressions[label])
+                else:
+                    client_labels.append(label)
+                           
+            selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.data_labels)}
+            
+            assert len(selected_clients) > 0
+            
+            results = {id_:c.compute_categorical_llf2(y_label,
+                                                X_labels,
+                                                betas
+                                                ) for id_,c in selected_clients.items()}
+            return results
+        
+        
+        for categorical_key, categorical_values in self.category_expressions.items():
+            all_categorical_tests = self.testing_engine.get_finished_tests_by_y_label(categorical_values)
+            categorical_test_x_label_mapping = {}
+            for t in all_categorical_tests:
+                x_label_key = tuple(sorted(list(t.X_labels)))
+                if x_label_key not in categorical_test_x_label_mapping:
+                    categorical_test_x_label_mapping[x_label_key] = []
+                categorical_test_x_label_mapping[x_label_key].append(t)
+            for x_label_key, categorical_tests in categorical_test_x_label_mapping.items():
+                categorical_tests = sorted(categorical_tests, key=lambda t: t.y_label)
+                #print('---')
+                #for t in categorical_tests:
+                #    print(t)
+                
+                betas = {t.y_label: t.beta for t in categorical_tests}
+                y_label = self.reversed_category_expressions[categorical_tests[0].y_label]
+                X_labels = x_label_key
+                llfs = _get_llfs(y_label, list(X_labels), betas)
+                #print(llfs)
+                
+                #print(categorical_tests[0])
+                for t in categorical_tests[1:]:
+                    #print(t)
+                    t.update_llf({k:0 for k in llfs.keys()})
+                categorical_tests[0].update_llf(llfs)
+                
+                #for t in categorical_tests:
+                #    print(t.llf)
             
     def update_ordinal_tests(self):
         def _get_llfs(t0, t1):
@@ -408,8 +466,9 @@ class Client:
             _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
   
             X = _data.to_pandas()[X_labels]
+            X['__const'] = 1
             X = X.to_numpy().astype(float)
-            X = sm.tools.add_constant(X) 
+            #X = sm.tools.add_constant(X) 
             
             y = _data.to_pandas()[y_label]
             y = y.to_numpy().astype(float)
@@ -434,8 +493,9 @@ class Client:
             _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
   
             X = _data.to_pandas()[X_labels]
+            X['__const'] = 1
             X = X.to_numpy().astype(float)
-            X = sm.tools.add_constant(X) 
+            #X = sm.tools.add_constant(X) 
             
             y = _data.to_pandas()[y_label]
             y = y.to_numpy().astype(float)
@@ -445,6 +505,7 @@ class Client:
             eta = glm_results.predict(which='linear')
             
             return eta
+        
         
         probas = _get_probas(y_label_ref_cat, X_labels, beta_ref_cat)
         eta = _get_eta(y_label, X_labels, beta)
@@ -468,6 +529,111 @@ class Client:
         
         return llf
     
+    def compute_categorical_llf2(self, y_label, X_labels, betas):
+        
+        def _get_eta(X_labels: List[str], beta):
+            _data = self.data            
+            _data = _data.with_columns(__dummy_data=pl.lit(0.0))
+  
+            X = _data.to_pandas()[X_labels]
+            X['__const'] = 1
+            X = X.to_numpy().astype(float)
+            #X = sm.tools.add_constant(X) 
+            
+            y = _data.to_pandas()['__dummy_data']
+            y = y.to_numpy().astype(float)
+            
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
+            eta = glm_results.predict(which='linear')
+            
+            return eta
+        
+        def _get_prob(X_labels: List[str], beta):
+            _data = self.data            
+            _data = _data.with_columns(__dummy_data=pl.lit(0.0))
+  
+            X = _data.to_pandas()[X_labels]
+            X['__const'] = 1
+            X = X.to_numpy().astype(float)
+            #X = sm.tools.add_constant(X) 
+            
+            
+            y = _data.to_pandas()['__dummy_data']
+            y = y.to_numpy().astype(float)
+            
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
+            prob = glm_results.predict()
+            
+            return prob
+        
+        def _get_llf(y_label: str, X_labels: List[str], beta):
+            _data = self.data
+            y_label, cat = y_label.split("__cat__")
+            _data = _data.with_columns(pl.when(pl.col(y_label) == cat)
+                                       .then(pl.lit(1.0))
+                                       .otherwise(pl.lit(0.0))
+                                       .alias(y_label))
+            _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
+            missing_cols = list(self.category_expressions - set(_data.columns))
+            _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
+  
+            X = _data.to_pandas()[X_labels]
+            X['__const'] = 1
+            X = X.to_numpy().astype(float)
+            #X = sm.tools.add_constant(X) 
+            
+            y = _data.to_pandas()[y_label]
+            y = y.to_numpy().astype(float)
+            
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
+            
+            return glm_results.llf
+        #return _get_llf(list(betas.keys())[0], X_labels, list(betas.values())[0])
+        
+        ## APPROACH 1 (with reference category)
+        # exp_etas = {cat:np.exp(_get_eta(X_labels, beta)) for cat, beta in betas.items()}
+        # exp_etas[list(exp_etas.keys())[-1]] = np.ones_like(exp_etas[list(exp_etas.keys())[-1]]) # set reference category exp_eta to ones
+        
+        # denominator = 1 + sum(list(exp_etas.values())[:-1]) # last category is reference category -> do not include in denominator
+
+        # probs = {cat:exp_etas[cat] / denominator for cat in exp_etas.keys()}
+        
+        # #print(probs)
+        
+        # def get_cat_index(data, y_label, cat):
+        #     cat_val = cat.split('__cat__')[-1]
+        #     return data.with_row_index().filter(pl.col(y_label) == cat_val)['index'].to_list()
+        
+        # cat_indexes = {cat: get_cat_index(self.data, y_label, cat) for cat in probs.keys()}
+        
+        # llf = 0 
+        # for cat in cat_indexes.keys():            
+        #     p = np.clip(probs[cat], a_min=1e-20, a_max=None)
+        #     llf += np.sum(np.log(np.take(p, cat_indexes[cat])))
+        
+        ## APPROACH 2
+        probs = {cat:np.clip(_get_prob(X_labels, beta),1e-15,1-1e-15) for cat, beta in betas.items()}
+        
+        #probs = {cat:p/(1-p) for cat,p in probs.items()}
+
+        denominator = sum(list(probs.values()))
+        probs = {cat:probs[cat] / denominator for cat in probs.keys()}
+        
+        def get_cat_index(data, y_label, cat):
+            cat_val = cat.split('__cat__')[-1]
+            return data.with_row_index().filter(pl.col(y_label) == cat_val)['index'].to_list()
+        
+        cat_indexes = {cat: get_cat_index(self.data, y_label, cat) for cat in probs.keys()}
+        
+        llf = 0 
+        for cat in cat_indexes.keys():
+            llf += np.sum(np.log(np.take(probs[cat], cat_indexes[cat])))
+        
+        return llf
+    
     def compute_ordinal_llf(self, X_labels, y_label0, y_label1, beta0, beta1):
         def _get_probas(y_label: str, X_labels: List[str], beta):
             _data = self.data
@@ -482,8 +648,9 @@ class Client:
                                     .alias(y_label))
                 
             X = _data.to_pandas()[X_labels]
+            X['__const'] = 1
             X = X.to_numpy().astype(float)
-            X = sm.tools.add_constant(X) 
+            #X = sm.tools.add_constant(X) 
             
             y = _data.to_pandas()[y_label]
             y = y.to_numpy().astype(float)
@@ -550,7 +717,7 @@ class Client:
         
     def _compute(self, data, y_label: str, X_labels: List[str], beta):
         #print(y_label, X_labels)
-        X = data.to_pandas()[X_labels]
+        X = data.to_pandas()[sorted(X_labels)]
         X['__const'] = 1
         X = X.to_numpy().astype(float)
         #X = sm.tools.add_constant(X) 
@@ -565,7 +732,7 @@ class Client:
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
         
-        do_log_reg = y_label in self.get_categories() or (y_label in self.schema and self.schema[y_label] == VariableType.ORDINAL)
+        do_log_reg = y_label.split('__cat__')[0] in self.get_categories() or (y_label in self.schema and self.schema[y_label] == VariableType.ORDINAL)
         
         result = self._run_regression(y,X,beta,do_log_reg)
         
