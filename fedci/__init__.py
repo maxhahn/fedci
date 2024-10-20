@@ -46,7 +46,9 @@ class TestingRound:
     
     def _init_beta0(self):
         #self.beta = np.random.randn(len(self.X_labels) + 1) # +1 for intercept
-        self.beta = np.zeros(len(self.X_labels) + 1) # +1 for intercept
+        
+        #self.beta = np.zeros(len(self.X_labels) + 1) # +1 for intercept
+        self.beta = np.ones(len(self.X_labels) + 1) # +1 for intercept
         
     def get_relative_change_in_deviance(self):
         if self.last_deviance is None:
@@ -538,7 +540,6 @@ class Client:
             X = _data.to_pandas()[X_labels]
             X['__const'] = 1
             X = X.to_numpy().astype(float)
-            #X = sm.tools.add_constant(X) 
             
             y = _data.to_pandas()['__dummy_data']
             y = y.to_numpy().astype(float)
@@ -548,7 +549,6 @@ class Client:
             eta = glm_results.predict(which='linear')
             
             return eta
-        
         def _get_prob(X_labels: List[str], beta):
             _data = self.data            
             _data = _data.with_columns(__dummy_data=pl.lit(0.0))
@@ -556,8 +556,6 @@ class Client:
             X = _data.to_pandas()[X_labels]
             X['__const'] = 1
             X = X.to_numpy().astype(float)
-            #X = sm.tools.add_constant(X) 
-            
             
             y = _data.to_pandas()['__dummy_data']
             y = y.to_numpy().astype(float)
@@ -568,57 +566,9 @@ class Client:
             
             return prob
         
-        def _get_llf(y_label: str, X_labels: List[str], beta):
-            _data = self.data
-            y_label, cat = y_label.split("__cat__")
-            _data = _data.with_columns(pl.when(pl.col(y_label) == cat)
-                                       .then(pl.lit(1.0))
-                                       .otherwise(pl.lit(0.0))
-                                       .alias(y_label))
-            _data = _data.to_dummies(cs.string(), separator='__cat__').cast(pl.Float64)
-            missing_cols = list(self.category_expressions - set(_data.columns))
-            _data = _data.with_columns(*[pl.lit(0).alias(c) for c in missing_cols])
-  
-            X = _data.to_pandas()[X_labels]
-            X['__const'] = 1
-            X = X.to_numpy().astype(float)
-            #X = sm.tools.add_constant(X) 
-            
-            y = _data.to_pandas()[y_label]
-            y = y.to_numpy().astype(float)
-            
-            glm_model = sm.GLM(y, X, family=family.Binomial())
-            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
-            
-            return glm_results.llf
-        #return _get_llf(list(betas.keys())[0], X_labels, list(betas.values())[0])
         
-        ## APPROACH 1 (with reference category)
-        # exp_etas = {cat:np.exp(_get_eta(X_labels, beta)) for cat, beta in betas.items()}
-        # exp_etas[list(exp_etas.keys())[-1]] = np.ones_like(exp_etas[list(exp_etas.keys())[-1]]) # set reference category exp_eta to ones
-        
-        # denominator = 1 + sum(list(exp_etas.values())[:-1]) # last category is reference category -> do not include in denominator
-
-        # probs = {cat:exp_etas[cat] / denominator for cat in exp_etas.keys()}
-        
-        # #print(probs)
-        
-        # def get_cat_index(data, y_label, cat):
-        #     cat_val = cat.split('__cat__')[-1]
-        #     return data.with_row_index().filter(pl.col(y_label) == cat_val)['index'].to_list()
-        
-        # cat_indexes = {cat: get_cat_index(self.data, y_label, cat) for cat in probs.keys()}
-        
-        # llf = 0 
-        # for cat in cat_indexes.keys():            
-        #     p = np.clip(probs[cat], a_min=1e-20, a_max=None)
-        #     llf += np.sum(np.log(np.take(p, cat_indexes[cat])))
-        
-        ## APPROACH 2
         probs = {cat:np.clip(_get_prob(X_labels, beta),1e-15,1-1e-15) for cat, beta in betas.items()}
         
-        #probs = {cat:p/(1-p) for cat,p in probs.items()}
-
         denominator = sum(list(probs.values()))
         probs = {cat:probs[cat] / denominator for cat in probs.keys()}
         
@@ -632,6 +582,9 @@ class Client:
         for cat in cat_indexes.keys():
             llf += np.sum(np.log(np.take(probs[cat], cat_indexes[cat])))
         
+        # print(y_label, X_labels)
+        # print(betas)
+        # print(llf)
         return llf
     
     def compute_ordinal_llf(self, X_labels, y_label0, y_label1, beta0, beta1):
