@@ -27,7 +27,7 @@ class TestingRound:
         self.y_label = y_label
         self.X_labels = X_labels
         self.tikhonov_lambda = tikhonov_lambda
-        self._init_beta0()
+        self.beta = np.zeros(len(self.X_labels) + 1)
         self.client_data = {
             'xwx': [],
             'xwz': [],
@@ -42,18 +42,15 @@ class TestingRound:
         return self.y_label == t.y_label and self.X_labels == t.X_labels   
     
     def __repr__(self):
-        return f'TestingRound - y: {self.y_label}, X: {self.X_labels}, total samples: {self.total_samples}, beta: {self.beta}, current iteration: {self.iterations}, current deviance: {abs(self.deviance)}, relative deviance change: {abs(self.deviance - self.last_deviance) / (0.1 + abs(self.deviance)) if self.last_deviance is not None else "?"}, llf: {self.llf}, rss: {self.rss}' 
-    
-    def _init_beta0(self):
-        #self.beta = np.random.randn(len(self.X_labels) + 1) # +1 for intercept
-        
-        #self.beta = np.zeros(len(self.X_labels) + 1) # +1 for intercept
-        self.beta = np.ones(len(self.X_labels) + 1) # +1 for intercept
+        return f'{self.__name__} - y: {self.y_label}, X: {self.X_labels}, total samples: {self.total_samples}, beta: {self.beta}, current iteration: {self.iterations}, current deviance: {abs(self.deviance)}, relative deviance change: {abs(self.deviance - self.last_deviance) / (0.1 + abs(self.deviance)) if self.last_deviance is not None else "?"}, llf: {self.llf}, rss: {self.rss}' 
         
     def get_relative_change_in_deviance(self):
         if self.last_deviance is None:
             return None
         return abs(self.deviance - self.last_deviance) / (0.1 + abs(self.deviance))
+    
+    def get_test_parameters(self):
+        return self.y_label, self.X_labels, self.beta
     
     def get_fit_stats(self, client_subset=None):
         #dev = [v for k,v in self.client_data['dev'].items() if client_subset is None or k in client_subset]
@@ -62,9 +59,6 @@ class TestingRound:
         nobs = [v for k,v in self.client_data['nobs'].items() if client_subset is None or k in client_subset]
     
         return {'llf': sum(llf), 'rss': sum(rss), 'nobs': sum(nobs)}
-    
-    def get_test_parameters(self):
-        return self.y_label, self.X_labels, self.beta
     
     def update_llf(self, results):
         self.providing_clients = set(results.keys())
@@ -109,6 +103,69 @@ class TestingRound:
         
         return self.get_relative_change_in_deviance() < self.convergence_threshold
     
+class CategoricalTestingRound(TestingRound):
+
+    def __init__(self, y_label, X_labels, categories, tikhonov_lambda=0):
+        self.y_label = y_label
+        self.X_labels = X_labels
+        self.categories = categories
+        self.tikhonov_lambda = tikhonov_lambda
+        self.beta = {c: np.zeros(len(self.X_labels) + 1) for c in categories}
+        self.client_data = {c:self._get_client_dict() for c in categories}
+        
+    def _get_client_dict(self):
+        return {
+            'xwx': {},
+            'xwz': {},
+            'dev': {},
+            'llf': {},
+            'rss': {},
+            'nobs': {}
+            }
+        
+    def _get_fit_stats(self, client_data, client_subset):
+        llf = [v for k,v in client_data['llf'].items() if client_subset is None or k in client_subset]
+        return sum(llf)
+        
+    def get_fit_stats(self, client_subset=None):
+        r = {}
+        for c, c_data in self.client_data.items():
+            r[c] = self._get_fit_stats(c_data, client_subset)
+        return {'llf': sum(r.values())}
+        
+    def update_llf(self, results):
+        self.providing_clients = set(results.keys())
+        self.client_data['llf'] = results
+        self.llf = sum(results.values())
+    
+    def aggregate_results(self, results):
+        self.providing_clients = set(results.keys())
+        cat_xwx = {}
+        cat_xwz = {}
+        cat_dev = {}
+        
+        # iterate over client_id -> data mapping
+        for d in results.values():
+            # iterate over cat -> category data mapping
+            for c, dx in d.items():
+                cat_xwx[c] = cat_xwx.get(c, []) + [dx[0]]
+                cat_xwz[c] = cat_xwz.get(c, []) + [dx[1]]
+                cat_dev[c] = cat_dev.get(c, []) + [dx[2]]
+                # TODO: finish test once change in all categories is below deviance threshold
+                
+        xwx_agg = {c:sum(xwxs) for c, xwxs in cat_xwx.items()}
+        xwx_agg = {c:xwxs + self.tikhonov_lambda*np.eye(xwxs.shape[0]) for c, xwxs in xwx_agg.items()}
+        xwz_agg = {c:sum(xwzs) for c, xwzs in cat_xwz.items()}
+        
+        self.beta = {c:np.linalg.inv(xwx_agg[cat]) @ xwz_agg[cat] for cat in self.beta.keys()}
+        
+        dev_per_cat = {c:sum(devs) for c, devs in cat_dev.items()}
+        self.last_deviance = self.deviance
+        self.deviance = max(dev_per_cat.values())
+        self.iterations += 1
+        
+        return self.get_relative_change_in_deviance() < self.convergence_threshold
+    
 class TestingEngine:
     def __init__(self, available_data, category_expressions, ordinal_expressions, tikhonov_lambda=0, max_regressors=None, max_iterations=25, save_steps=10):
         self.available_data = available_data
@@ -145,8 +202,10 @@ class TestingEngine:
             powerset_of_regressors = temp_powerset
             
             if y_var in category_expressions:
-                for y_var_cat in category_expressions[y_var]:
-                    self.testing_rounds.extend([TestingRound(y_label=y_var_cat, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
+                #for y_var_cat in category_expressions[y_var]:
+                #    self.testing_rounds.extend([TestingRound(y_label=y_var_cat, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
+                # omit first category and use it as reference category
+                self.testing_rounds.extend([CategoricalTestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), categories=category_expressions[y_var][1:], tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             elif y_var in ordinal_expressions:
                 for y_var_ord in ordinal_expressions[y_var][:-1]: # skip last category of ordinal regression
                     self.testing_rounds.extend([TestingRound(y_label=y_var_ord, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
@@ -216,7 +275,11 @@ class Server:
                 else:
                     client_labels.append(label)                    
             
-            selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.extended_data_labels)}
+            #print(client_labels)
+            #print([c.data_labels for c in self.clients.values()])
+            
+            # TODO: SWITCH WHICH CASE DEPENDING ON VARIABLE TYPE? OR FIND SMARTER WAY TO FIND DECISION
+            selected_clients = {id_: c for id_, c in self.clients.items() if set(client_labels).issubset(c.data_labels) or set(client_labels).issubset(c.extended_data_labels)}
             if len(selected_clients) == 0:
                 print('WARNING! No client fulfills data requirements, removing current test...')
                 self.testing_engine.remove_current_test()
@@ -666,7 +729,86 @@ class Client:
                                     .then(pl.lit(1.0))
                                     .otherwise(pl.lit(0.0))
                                     .alias(y_label))
+            
+        if y_label in self.schema and self.schema[y_label] == VariableType.CATEGORICAL:
+            return self._compute_categorical(_data, y_label, X_labels, beta)
+            
         return self._compute(_data, y_label, X_labels, beta)
+    
+    def _compute_categorical(self, data, y_label, X_labels, betas):
+        available_cats = data.select(cs.starts_with(y_label + '__cat__')).columns
+        results = {}
+        
+        X = data.to_pandas()[sorted(X_labels)]
+        X['__const'] = 1
+        X = X.to_numpy().astype(float)
+
+
+        def _internal_logreg(y, X, beta):
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
+            
+            eta = glm_results.predict(which='linear')
+            
+            return glm_results, eta
+        
+        def _internal_mu_correction(etas):
+            denom = 1 + sum(np.exp(etas.values()))
+            mus = {c:np.exp(v)/denom for c,v in etas.items()}
+            return mus
+        
+        def _internal_logreg_combination(d):
+            
+            
+        
+            # g' is inverse of link function
+            inverse_link = glm_results.family.link.inverse
+            
+            # TODO: different way to calculate mu
+            
+            mu = inverse_link(eta)
+            
+            deviance = glm_results.deviance
+            
+            # delta g' is derivative of inverse link function
+            derivative_inverse_link = glm_results.family.link.inverse_deriv
+            dmu_deta = derivative_inverse_link(eta)
+            
+            rss = sum(glm_results.resid_response**2)
+            llf = glm_results.llf
+            
+            z = eta + (y - mu)/dmu_deta
+            W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
+            
+            # Tikhonov regularization
+            
+            xwx = X.T @ W @ X
+            #r1 = r1 + self.tikhonov_lambda * np.eye(r1.shape[0])
+            xwz = X.T @ W @ z
+        
+            return xwx, xwz, deviance, llf, rss, len(y)
+            
+            
+            
+        models = {}
+        for cat in betas.keys():
+            if cat not in available_cats:
+                continue
+            y = data.to_pandas()[cat]
+            y = y.to_numpy().astype(float)
+            
+            glm_model = sm.GLM(y, X, family=family.Binomial())
+            glm_results = GLMResults(glm_model, betas[cat], normalized_cov_params=None, scale=None)
+            models[cat] = glm_results
+            
+            eta = glm_results.predict(which='linear')
+        etas = {c:m.predict(which='linear') for c,m in models.items()}
+        denom = 1 + sum(np.exp(etas.values()))
+        mus = {c:np.exp(v)/denom for c,v in etas.items()}
+        
+        # TODOL HOW TO HANDLE DMU_DETA
+            
+        return results
         
     def _compute(self, data, y_label: str, X_labels: List[str], beta):
         #print(y_label, X_labels)
@@ -725,11 +867,11 @@ class Client:
         
         # Tikhonov regularization
         
-        r1 = X.T @ W @ X
+        xwx = X.T @ W @ X
         #r1 = r1 + self.tikhonov_lambda * np.eye(r1.shape[0])
-        r2 = X.T @ W @ z
+        xwz = X.T @ W @ z
     
-        return r1, r2, deviance, llf, rss, len(y)
+        return xwx, xwz, deviance, llf, rss, len(y)
     
     
     
@@ -773,29 +915,6 @@ class LikelihoodRatioTest:
         #print(f'X_labels for t1: {self.t1.X_labels}, {self.t1.beta}')
         
         p_val = scipy.stats.chi2.sf(t, par1-par0)
-        
-        return p_val
-        
-    def _run_f_test(self):
-        # t1 should always encompass more regressors -> less client can fulfill this
-        #assert len(self.t1.providing_clients) < len(self.t0.providing_clients)
-        
-        t0_fit_stats = self.t0.get_fit_stats(self.t1.providing_clients)
-        t1_fit_stats = self.t1.get_fit_stats(self.t1.providing_clients)
-        
-        rss0 = t0_fit_stats['rss']
-        rss1 = t1_fit_stats['rss']
-        par0 = len(self.t0.X_labels) + 1 # X + intercept
-        par1 = len(self.t1.X_labels) + 1 # X + intercept
-        
-        nobs = t0_fit_stats['nobs']
-        delta_rss = rss0 - rss1
-        dfn = par1 - par0
-        dfd = nobs - par1
-        
-        f = delta_rss*dfd/rss1/dfn
-        
-        p_val = scipy.stats.f.sf(f, dfn, dfd)
         
         return p_val
     
