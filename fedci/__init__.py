@@ -140,7 +140,6 @@ class CategoricalTestingRound(TestingRound):
         self.providing_clients = set(results.keys())
         cat_xwx = {}
         cat_xwz = {}
-        cat_dev = {}
         
         self.llf = {}
         client_deviance = {}
@@ -179,7 +178,7 @@ class CategoricalTestingRound(TestingRound):
         return self.get_relative_change_in_deviance() < self.convergence_threshold
     
 class TestingEngine:
-    def __init__(self, available_data, category_expressions, ordinal_expressions, tikhonov_lambda=0, max_regressors=None, max_iterations=100, save_steps=10):
+    def __init__(self, available_data, category_expressions, ordinal_expressions, binary_columns, tikhonov_lambda=0, max_regressors=None, max_iterations=100, save_steps=10):
         self.available_data = available_data
         self.max_regressors = max_regressors
         self.max_iterations = max_iterations
@@ -190,6 +189,7 @@ class TestingEngine:
         self.finished_rounds = []
         self.testing_rounds = []
         
+        self.binary_columns = binary_columns
         self.category_expressions = category_expressions
         self.ordinal_expressions = ordinal_expressions
         
@@ -221,6 +221,8 @@ class TestingEngine:
             elif y_var in ordinal_expressions:
                 for y_var_ord in ordinal_expressions[y_var][:-1]: # skip last category of ordinal regression
                     self.testing_rounds.extend([TestingRound(y_label=y_var_ord, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
+            #elif y_var in binary_columns:
+            #    self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             else:
                 self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
             
@@ -253,6 +255,19 @@ class Server:
     def __init__(self, clients, tikhonov_lambda=0, max_regressors=None):
         self.clients = clients
         self.available_data = set.union(*[set(c.data_labels) for c in self.clients.values()])
+        self.schemas = {}
+        self.total_schema = {}
+        for _id, c in self.clients.items():
+            schema = c.get_schema()
+            self.schemas[_id] = schema
+            for key, var_type in schema.items():
+                if key not in self.total_schema:
+                    self.total_schema[key] = var_type
+                else:
+                    assert self.total_schema[key] == var_type, 'Schema mismatch between clients detected!'
+                    
+        binary_columns = [c for c,t in self.total_schema.items() if t == VariableType.BINARY]
+                    
         self.category_expressions = {}
         self.ordinal_expressions = {}
         for _, client in self.clients.items():
@@ -268,6 +283,7 @@ class Server:
         self.testing_engine = TestingEngine(self.available_data,
                                             self.category_expressions,
                                             self.ordinal_expressions,
+                                            binary_columns,
                                             tikhonov_lambda=tikhonov_lambda,
                                             max_regressors=max_regressors)
         
@@ -307,7 +323,7 @@ class Server:
             
         # fix categorical tests
         #self.update_categorical_tests()
-        self.update_categorical_tests2()
+        #self.update_categorical_tests2()
         # fix ordinal llfs
         self.update_ordinal_tests()
         
@@ -484,6 +500,7 @@ class VariableType(enum.Enum):
     CONTINUOS = 0
     CATEGORICAL = 1
     ORDINAL = 2
+    BINARY = 2
     
 class Client:
     def __init__(self, data):
@@ -496,8 +513,10 @@ class Client:
                 var_type = VariableType.CONTINUOS
             elif v == pl.String:
                 var_type = VariableType.CATEGORICAL
-            elif v == pl.Int32:
+            elif v == pl.Int32 or v == pl.Int64:
                 var_type = VariableType.ORDINAL
+            elif v == pl.Bool:
+                var_type = VariableType.BINARY
             else:
                 raise Exception('Unknown schema type encountered')
             
@@ -512,6 +531,9 @@ class Client:
         if column not in self.schema or self.schema[column] != VariableType.CATEGORICAL:
             return
         self.data = self.data.filter(pl.col(column).is_in(values))
+        
+    def get_schema(self):
+        return self.schema
     
     def get_categories(self):
         result = {}
@@ -846,7 +868,7 @@ class Client:
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
         
-        do_log_reg = y_label.split('__cat__')[0] in self.get_categories() or (y_label in self.schema and self.schema[y_label] == VariableType.ORDINAL)
+        do_log_reg = y_label in self.schema and self.schema[y_label] in [VariableType.ORDINAL, VariableType.BINARY]
         
         result = self._run_regression(y,X,beta,do_log_reg)
         

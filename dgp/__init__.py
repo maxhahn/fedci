@@ -83,6 +83,8 @@ class Node:
     
 class CategoricalNode(Node):
     def __init__(self, name, parents=[], min_categories=2, max_categories=4, min_percent_per_category=0.15):
+        assert max_categories > 2, 'Categorical Nodes should only be used for variables with more than two expression levels'
+        
         super().__init__(name, parents)
         
         self.num_categories = np.random.randint(min_categories, max_categories+1)
@@ -102,6 +104,17 @@ class OrdinalNode(Node):
     def _calc(self, num_samples):
         quantiles = get_quantiles(self.num_categories, self.min_percent_per_category)
         return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32)
+    
+class BinaryNode(Node):
+    def __init__(self, name, parents=[], min_percent_per_category=0.15):
+        super().__init__(name, parents)
+        
+        self.num_categories = 2
+        self.min_percent_per_category = min_percent_per_category
+        
+    def _calc(self, num_samples):
+        quantiles = get_quantiles(self.num_categories, self.min_percent_per_category)
+        return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32) == 1
 
 class GenericNode(Node):
     def __init__(self, name, parents=[], node_restrictions=None, **kwargs):
@@ -117,7 +130,8 @@ class GenericNode(Node):
             self.node_choices = [
                 Node(self.name, self.parents),
                 CategoricalNode(self.name, self.parents),
-                OrdinalNode(self.name, self.parents)
+                OrdinalNode(self.name, self.parents),
+                BooleanNode(self.name, self.parents)
             ]
         else:
             self.node_choices = [n(self.name, self.parents, **self.kwargs) for n in node_restrictions]
