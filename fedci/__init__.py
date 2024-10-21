@@ -42,7 +42,7 @@ class TestingRound:
         return self.y_label == t.y_label and self.X_labels == t.X_labels   
     
     def __repr__(self):
-        return f'{self.__name__} - y: {self.y_label}, X: {self.X_labels}, total samples: {self.total_samples}, beta: {self.beta}, current iteration: {self.iterations}, current deviance: {abs(self.deviance)}, relative deviance change: {abs(self.deviance - self.last_deviance) / (0.1 + abs(self.deviance)) if self.last_deviance is not None else "?"}, llf: {self.llf}, rss: {self.rss}' 
+        return f'{self.__class__.__name__} - y: {self.y_label}, X: {self.X_labels}, total samples: {self.total_samples}, beta: {self.beta}, current iteration: {self.iterations}, current deviance: {abs(self.deviance)}, relative deviance change: {abs(self.deviance - self.last_deviance) / (0.1 + abs(self.deviance)) if self.last_deviance is not None else "?"}, llf: {self.llf}, rss: {self.rss}' 
         
     def get_relative_change_in_deviance(self):
         if self.last_deviance is None:
@@ -128,10 +128,8 @@ class CategoricalTestingRound(TestingRound):
         return sum(llf)
         
     def get_fit_stats(self, client_subset=None):
-        r = {}
-        for c, c_data in self.client_data.items():
-            r[c] = self._get_fit_stats(c_data, client_subset)
-        return {'llf': sum(r.values())}
+        llf = self._get_fit_stats(self.client_data, client_subset)
+        return {'llf': llf}
         
     def update_llf(self, results):
         self.providing_clients = set(results.keys())
@@ -144,30 +142,44 @@ class CategoricalTestingRound(TestingRound):
         cat_xwz = {}
         cat_dev = {}
         
+        self.llf = {}
+        client_deviance = {}
+
         # iterate over client_id -> data mapping
-        for d in results.values():
+        for client_id, r in results.items():
             # iterate over cat -> category data mapping
-            for c, dx in d.items():
+            stat_results = r[0]
+            self.llf[client_id] = r[1]
+            client_deviance[client_id] = r[2]
+            for c, dx in stat_results.items():
                 cat_xwx[c] = cat_xwx.get(c, []) + [dx[0]]
                 cat_xwz[c] = cat_xwz.get(c, []) + [dx[1]]
-                cat_dev[c] = cat_dev.get(c, []) + [dx[2]]
                 # TODO: finish test once change in all categories is below deviance threshold
-                
         xwx_agg = {c:sum(xwxs) for c, xwxs in cat_xwx.items()}
         xwx_agg = {c:xwxs + self.tikhonov_lambda*np.eye(xwxs.shape[0]) for c, xwxs in xwx_agg.items()}
         xwz_agg = {c:sum(xwzs) for c, xwzs in cat_xwz.items()}
         
-        self.beta = {c:np.linalg.inv(xwx_agg[cat]) @ xwz_agg[cat] for cat in self.beta.keys()}
+        self.beta = {cat:np.linalg.inv(xwx_agg[cat]) @ xwz_agg[cat] for cat in self.beta.keys()}
         
-        dev_per_cat = {c:sum(devs) for c, devs in cat_dev.items()}
         self.last_deviance = self.deviance
-        self.deviance = max(dev_per_cat.values())
+        self.deviance = sum(client_deviance.values())
         self.iterations += 1
+        
+        self.client_data = {'llf': self.llf}
+        
+        #print('Categorical Testing Round Result Aggregation')
+        #print('Iteration:', self.iterations)
+        # print(results)
+        # print(list(self.beta.keys()))
+        #print(self.beta)
+        #print(self.get_relative_change_in_deviance())
+        # print(self.llf)
+        # print('---')
         
         return self.get_relative_change_in_deviance() < self.convergence_threshold
     
 class TestingEngine:
-    def __init__(self, available_data, category_expressions, ordinal_expressions, tikhonov_lambda=0, max_regressors=None, max_iterations=25, save_steps=10):
+    def __init__(self, available_data, category_expressions, ordinal_expressions, tikhonov_lambda=0, max_regressors=None, max_iterations=100, save_steps=10):
         self.available_data = available_data
         self.max_regressors = max_regressors
         self.max_iterations = max_iterations
@@ -736,59 +748,13 @@ class Client:
         return self._compute(_data, y_label, X_labels, beta)
     
     def _compute_categorical(self, data, y_label, X_labels, betas):
+        
         available_cats = data.select(cs.starts_with(y_label + '__cat__')).columns
         results = {}
         
         X = data.to_pandas()[sorted(X_labels)]
         X['__const'] = 1
         X = X.to_numpy().astype(float)
-
-
-        def _internal_logreg(y, X, beta):
-            glm_model = sm.GLM(y, X, family=family.Binomial())
-            glm_results = GLMResults(glm_model, beta, normalized_cov_params=None, scale=None)
-            
-            eta = glm_results.predict(which='linear')
-            
-            return glm_results, eta
-        
-        def _internal_mu_correction(etas):
-            denom = 1 + sum(np.exp(etas.values()))
-            mus = {c:np.exp(v)/denom for c,v in etas.items()}
-            return mus
-        
-        def _internal_logreg_combination(d):
-            
-            
-        
-            # g' is inverse of link function
-            inverse_link = glm_results.family.link.inverse
-            
-            # TODO: different way to calculate mu
-            
-            mu = inverse_link(eta)
-            
-            deviance = glm_results.deviance
-            
-            # delta g' is derivative of inverse link function
-            derivative_inverse_link = glm_results.family.link.inverse_deriv
-            dmu_deta = derivative_inverse_link(eta)
-            
-            rss = sum(glm_results.resid_response**2)
-            llf = glm_results.llf
-            
-            z = eta + (y - mu)/dmu_deta
-            W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
-            
-            # Tikhonov regularization
-            
-            xwx = X.T @ W @ X
-            #r1 = r1 + self.tikhonov_lambda * np.eye(r1.shape[0])
-            xwz = X.T @ W @ z
-        
-            return xwx, xwz, deviance, llf, rss, len(y)
-            
-            
             
         models = {}
         for cat in betas.keys():
@@ -801,14 +767,67 @@ class Client:
             glm_results = GLMResults(glm_model, betas[cat], normalized_cov_params=None, scale=None)
             models[cat] = glm_results
             
-            eta = glm_results.predict(which='linear')
-        etas = {c:m.predict(which='linear') for c,m in models.items()}
-        denom = 1 + sum(np.exp(etas.values()))
-        mus = {c:np.exp(v)/denom for c,v in etas.items()}
+        etas = {c:np.clip(m.predict(which='linear'), -709, 709) for c,m in models.items()}
+        denom = 1 + sum(np.exp(eta) for eta in etas.values())
         
-        # TODOL HOW TO HANDLE DMU_DETA
+        mus = {c:np.exp(eta)/denom for c,eta in etas.items()}
+        
+        def sigmoid(x):
+            return 1 / (1 + np.exp(-x))
+        
+        dmu_deta = {c:mu*(1-mu) for c,mu in mus.items()}
+        
+        for cat in dmu_deta.keys():
+            y = data.to_pandas()[cat]
+            y = y.to_numpy().astype(float)
             
-        return results
+            z = etas[cat] + (y - mus[cat])/np.clip(dmu_deta[cat],1e-12,None)
+            W = np.diag((dmu_deta[cat]**2)/max(np.var(mus[cat]), 1e-8))
+            #W = np.diag(dmu_deta[cat])
+            
+            xwx = X.T @ W @ X
+            xwz = X.T @ W @ z
+            
+            results[cat] = (xwx, xwz)
+        
+        # LLF
+        def get_cat_index(data, y_label, cat):
+            cat_val = cat.split('__cat__')[-1]
+            return data.with_row_index().filter(pl.col(y_label) == cat_val)['index'].to_list()
+        
+        def get_ref_cat_index(data, y_label, cats):
+            cat_vals = [cat.split('__cat__')[-1] for cat in cats]
+            return data.with_row_index().filter(~pl.col(y_label).is_in(cat_vals))['index'].to_list()
+        
+        cat_indexes = {cat: get_cat_index(self.data, y_label, cat) for cat in mus.keys()}
+        
+        llf = 0 
+        for cat in cat_indexes.keys():
+            llf += np.sum(np.log(np.take(mus[cat], cat_indexes[cat])))
+        llf += np.sum(np.log(np.take(1/denom, get_ref_cat_index(self.data, y_label, cat_indexes.keys()))))
+        
+        # DEVIANCE + LLF SAT
+        llf_sat = 0
+        for cat in cat_indexes.keys():
+            y = data.to_pandas()[cat]
+            y = y.to_numpy().astype(float)
+            
+            # Only add log for y == 1, since log(0) should be excluded
+            llf_sat += np.sum(y * np.log(np.clip(y, 1e-10, None)))  # Clip to avoid log(0) issues
+            
+        def get_ref_cat_mask(data, y_label, cats):
+            cat_vals = [cat.split('__cat__')[-1] for cat in cats]
+            return data.with_columns(__mask=~pl.col(y_label).is_in(cat_vals))['__mask'].cast(pl.Float64).to_numpy()
+            
+        # Handle reference category similarly
+        #y_ref = data.to_pandas()[reference_category]
+        #y_ref = y_ref.to_numpy().astype(float)
+        y_ref = get_ref_cat_mask(self.data, y_label, cat_indexes.keys())
+        llf_sat += np.sum(y_ref * np.log(np.clip(y_ref, 1e-10, None)))
+        
+        deviance = 2 * (llf_sat - llf)
+            
+        return results, llf, deviance
         
     def _compute(self, data, y_label: str, X_labels: List[str], beta):
         #print(y_label, X_labels)
@@ -918,6 +937,89 @@ class LikelihoodRatioTest:
         
         return p_val
     
+class EmptyLikelihoodRatioTest(LikelihoodRatioTest):
+    def __init__(self, y_label, x_label, s_labels, p_val):
+        self.y_label = y_label
+        self.x_label = x_label
+        self.s_labels = s_labels
+        self.p_val = p_val
+        
+class CategoricalLikelihoodRatioTest(LikelihoodRatioTest):  
+
+    def _run_likelihood_test(self):
+        
+        # t1 should always encompass more regressors -> less client can fulfill this
+        #assert len(self.t1.providing_clients) < len(self.t0.providing_clients)
+
+        t0_llf = self.t0.get_fit_stats(self.t1.providing_clients)['llf']
+        t1_llf = self.t1.get_fit_stats(self.t1.providing_clients)['llf']
+        
+        # d_y = num cats
+        # DOF Z = size cond set
+        # DOF X = 1
+        
+        
+        
+        num_cats = len(self.t0.beta) + 1
+        
+        t0_dof = (num_cats-1)*len(list(self.t0.beta.values())[0]) # (d_y - 1)*(DOF(Z)+1)
+        t1_dof = (num_cats-1)*len(list(self.t1.beta.values())[0]) # (d_y - 1)*(DOF(Z)+DOF(X)+1)
+        t = -2*(t0_llf - t1_llf)
+        
+        p_val = stats.chi2.sf(t, t1_dof-t0_dof)
+        
+        if self.y_label == 'Y' and self.x_label == 'X' and len(self.s_labels) > 0 and self.s_labels[0] == 'Z':
+            print(f'Regressing {self.y_label} ~ {self.x_label} + {self.s_labels}')
+            print('T0', self.t0)
+            print('T1', self.t1)
+            print(f'Num Categories: {num_cats}')
+            print(f'T0 llf: {t0_llf}, T1 llf: {t1_llf}')
+            print(f'DOF M0: {t0_dof}, DOF M1: {t1_dof} -> Test DOF = {t1_dof-t0_dof}')
+            print(f'Test Statistic: {t}, p val: {p_val}')
+        
+        return p_val
+    
+class OrdinalLikelihoodRatioTest(LikelihoodRatioTest):
+    def __init__(self, y_label, t0s, t1s, num_cats):
+        assert len(t0s) > 0
+        assert len(t1s) > 0
+        #assert len(t0s) == len(t1s)
+        assert len(t0s[0].X_labels) + 1 == len(t1s[0].X_labels)
+        # TODO: assert more data integrity
+        #assert t0s[0].y_label == t1s[0].y_label
+        
+        t0s = sorted(t0s, key=lambda x: int(x.y_label.split('__ord__')[-1]))
+        t1s = sorted(t1s, key=lambda x: int(x.y_label.split('__ord__')[-1]))
+        
+        self.y_label = y_label
+        self.x_label = (set(t1s[0].X_labels) - set(t0s[0].X_labels)).pop()
+        self.s_labels = t0s[0].X_labels
+        self.t0_params = len(t0s[0].beta)
+        self.t1_params = len(t1s[0].beta)
+        self.p_val = self._run_likelihood_test(t0s, t1s, num_cats)
+        self.p_val = round(self.p_val, 4)
+        
+    def _run_likelihood_test(self, t0s, t1s, num_cats):
+        
+        # t1 should always encompass more regressors -> less client can fulfill this
+        #assert len(self.t1.providing_clients) < len(self.t0.providing_clients)
+        
+        providing_clients = t1s[0].providing_clients
+        
+        t0_llf = sum([t.get_fit_stats(providing_clients)['llf'] for t in t0s])
+        t1_llf = sum([t.get_fit_stats(providing_clients)['llf'] for t in t1s])
+        
+        # d_y = num cats
+        # DOF Z = size cond set
+        # DOF X = 1
+        t0_dof = (num_cats-1)*self.t0_params # (d_y - 1)*(DOF(Z)+1)
+        t1_dof = (num_cats-1)*self.t1_params # (d_y - 1)*(DOF(Z)+DOF(X)+1)
+        t = -2*(t0_llf - t1_llf)
+        
+        p_val = stats.chi2.sf(t, t1_dof-t0_dof)
+        
+        return p_val
+    
 class SymmetricLikelihoodRatioTest:
     
     def __init__(self, lrt0: LikelihoodRatioTest, lrt1: LikelihoodRatioTest):
@@ -957,7 +1059,10 @@ def get_likelihood_tests(finished_rounds):
                 continue
             assert len(comparison_round) == 1
             comparison_round = comparison_round[0]
-            tests.append(LikelihoodRatioTest(comparison_round, curr_round))
+            if type(curr_round) != CategoricalTestingRound:
+                tests.append(LikelihoodRatioTest(comparison_round, curr_round))
+            else:
+                tests.append(CategoricalLikelihoodRatioTest(comparison_round, curr_round))
     
     return tests
 
