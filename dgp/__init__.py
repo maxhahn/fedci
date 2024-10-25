@@ -123,27 +123,26 @@ class GenericNode(Node):
         
         self.kwargs = kwargs
         
-        # TODO: add support for parameters of categorical and ordinal nodes
-        
-        
         if node_restrictions is None:
-            self.node_choices = [
-                Node(self.name, self.parents),
-                CategoricalNode(self.name, self.parents),
-                OrdinalNode(self.name, self.parents),
-                BooleanNode(self.name, self.parents)
+            self.node_restrictions = [
+                Node,
+                CategoricalNode,
+                OrdinalNode,
+                BinaryNode
             ]
         else:
-            self.node_choices = [n(self.name, self.parents, **self.kwargs) for n in node_restrictions]
+            self.node_restrictions = node_restrictions
         
-        self.node = random.choice(self.node_choices)
-        
+        self._init_node()
+      
+    def _init_node(self):  
+        self.node = random.choice([n(self.name, self.parents, **self.kwargs) for n in self.node_restrictions])
         self.coefficients = self.node.coefficients
         self.intercept = uniform_sample()
         
     def reset(self):
         self.node.reset()
-        self.node = random.choice(self.node_choices)
+        self._init_node()
         
     def get(self, num_samples):
         return self.node.get(num_samples)

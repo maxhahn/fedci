@@ -23,10 +23,9 @@ class TestingRound:
     llf = None
     total_samples = None
     
-    def __init__(self, y_label, X_labels, tikhonov_lambda=0):
+    def __init__(self, y_label, X_labels):
         self.y_label = y_label
         self.X_labels = X_labels
-        self.tikhonov_lambda = tikhonov_lambda
         self.beta = np.zeros(len(self.X_labels) + 1)
         self.client_data = {
             'xwx': [],
@@ -91,9 +90,12 @@ class TestingRound:
         nobs = self.client_data['nobs']
         
         xwx_agg = sum(xwx.values())
-        xwx_agg = xwx_agg + self.tikhonov_lambda*np.eye(xwx_agg.shape[0]) # tikhonov/ridge regularization
-        
-        self.beta = np.linalg.inv(xwx_agg) @ sum(xwz.values())
+        try:
+            xwx_agg_inv = np.linalg.inv(xwx_agg)
+        except np.linalg.LinAlgError:
+            xwx_agg_inv = np.linalg.pinv(xwx_agg)
+            
+        self.beta = xwx_agg_inv @ sum(xwz.values())
         self.last_deviance = self.deviance
         self.deviance = sum(dev.values())
         self.llf = sum(llf.values())
@@ -105,11 +107,10 @@ class TestingRound:
     
 class CategoricalTestingRound(TestingRound):
 
-    def __init__(self, y_label, X_labels, categories, tikhonov_lambda=0):
+    def __init__(self, y_label, X_labels, categories):
         self.y_label = y_label
         self.X_labels = X_labels
         self.categories = categories
-        self.tikhonov_lambda = tikhonov_lambda
         self.beta = {c: np.zeros(len(self.X_labels) + 1) for c in categories}
         self.client_data = {c:self._get_client_dict() for c in categories}
         
@@ -155,10 +156,16 @@ class CategoricalTestingRound(TestingRound):
                 cat_xwz[c] = cat_xwz.get(c, []) + [dx[1]]
                 # TODO: finish test once change in all categories is below deviance threshold
         xwx_agg = {c:sum(xwxs) for c, xwxs in cat_xwx.items()}
-        xwx_agg = {c:xwxs + self.tikhonov_lambda*np.eye(xwxs.shape[0]) for c, xwxs in xwx_agg.items()}
         xwz_agg = {c:sum(xwzs) for c, xwzs in cat_xwz.items()}
         
-        self.beta = {cat:np.linalg.inv(xwx_agg[cat]) @ xwz_agg[cat] for cat in self.beta.keys()}
+        xwx_agg_inv = {}
+        for c,xwx in xwx_agg.items():
+            try:
+                xwx_agg_inv[c] = np.linalg.inv(xwx)
+            except np.linalg.LinAlgError:
+                xwx_agg_inv[c] = np.linalg.pinv(xwx)
+        
+        self.beta = {cat:xwx_agg_inv[cat] @ xwz_agg[cat] for cat in self.beta.keys()}
         
         self.last_deviance = self.deviance
         self.deviance = sum(client_deviance.values())
@@ -178,13 +185,11 @@ class CategoricalTestingRound(TestingRound):
         return self.get_relative_change_in_deviance() < self.convergence_threshold
     
 class TestingEngine:
-    def __init__(self, available_data, category_expressions, ordinal_expressions, binary_columns, tikhonov_lambda=0, max_regressors=None, max_iterations=100, save_steps=10):
+    def __init__(self, available_data, category_expressions, ordinal_expressions, binary_columns, max_regressors=None, max_iterations=500, save_steps=10):
         self.available_data = available_data
         self.max_regressors = max_regressors
         self.max_iterations = max_iterations
         self.save_steps = save_steps
-        
-        self.tikhonov_lambda = tikhonov_lambda
         
         self.finished_rounds = []
         self.testing_rounds = []
@@ -199,6 +204,7 @@ class TestingEngine:
             set_of_regressors = available_data - {y_var}
                 
             _max_conditioning_set_size = min(len(set_of_regressors), self.max_regressors) if self.max_regressors is not None else len(set_of_regressors)
+            
             powerset_of_regressors = chain.from_iterable(combinations(set_of_regressors, r) for r in range(0,_max_conditioning_set_size+1))
             
             # expand categorical features in regressor sets
@@ -214,17 +220,12 @@ class TestingEngine:
             powerset_of_regressors = temp_powerset
             
             if y_var in category_expressions:
-                #for y_var_cat in category_expressions[y_var]:
-                #    self.testing_rounds.extend([TestingRound(y_label=y_var_cat, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
-                # omit first category and use it as reference category
-                self.testing_rounds.extend([CategoricalTestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), categories=category_expressions[y_var][1:], tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
+                self.testing_rounds.extend([CategoricalTestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), categories=category_expressions[y_var][1:]) for x_vars in powerset_of_regressors])
             elif y_var in ordinal_expressions:
                 for y_var_ord in ordinal_expressions[y_var][:-1]: # skip last category of ordinal regression
-                    self.testing_rounds.extend([TestingRound(y_label=y_var_ord, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
-            #elif y_var in binary_columns:
-            #    self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
+                    self.testing_rounds.extend([TestingRound(y_label=y_var_ord, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
             else:
-                self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars)), tikhonov_lambda=self.tikhonov_lambda) for x_vars in powerset_of_regressors])
+                self.testing_rounds.extend([TestingRound(y_label=y_var, X_labels=sorted(list(x_vars))) for x_vars in powerset_of_regressors])
             
         self.testing_rounds = sorted(self.testing_rounds, key=lambda key: len(key.X_labels))
         self.is_finished = len(self.testing_rounds) == 0
@@ -252,7 +253,7 @@ class TestingEngine:
             
 
 class Server:
-    def __init__(self, clients, tikhonov_lambda=0, max_regressors=None):
+    def __init__(self, clients, max_regressors=None):
         self.clients = clients
         self.available_data = set.union(*[set(c.data_labels) for c in self.clients.values()])
         self.schemas = {}
@@ -284,7 +285,6 @@ class Server:
                                             self.category_expressions,
                                             self.ordinal_expressions,
                                             binary_columns,
-                                            tikhonov_lambda=tikhonov_lambda,
                                             max_regressors=max_regressors)
         
     def run_tests(self):
@@ -500,7 +500,7 @@ class VariableType(enum.Enum):
     CONTINUOS = 0
     CATEGORICAL = 1
     ORDINAL = 2
-    BINARY = 2
+    BINARY = 3
     
 class Client:
     def __init__(self, data):
@@ -508,6 +508,7 @@ class Client:
         self.data_labels = sorted(self.data.columns)
         self.extended_data_labels = sorted(self.data.to_dummies(cs.string(), separator='__cat__').columns)
         self.schema = {}
+        #print(self.data.schema)
         for k,v in dict(self.data.schema).items():
             if v == pl.Float64:
                 var_type = VariableType.CONTINUOS
@@ -515,14 +516,12 @@ class Client:
                 var_type = VariableType.CATEGORICAL
             elif v == pl.Int32 or v == pl.Int64:
                 var_type = VariableType.ORDINAL
-            elif v == pl.Bool:
+            elif v == pl.Boolean:
                 var_type = VariableType.BINARY
             else:
                 raise Exception('Unknown schema type encountered')
             
             self.schema[k] = var_type
-            
-        self.tikhonov_lambda = 1e-5
             
     def receive_category_expressions(self, expressions):
         self.category_expressions = set([li for l in expressions.values() for li in l])
@@ -774,6 +773,8 @@ class Client:
         available_cats = data.select(cs.starts_with(y_label + '__cat__')).columns
         results = {}
         
+        #print(f'REGRESSING: {y_label} ~ {X_labels}')
+        
         X = data.to_pandas()[sorted(X_labels)]
         X['__const'] = 1
         X = X.to_numpy().astype(float)
@@ -789,26 +790,50 @@ class Client:
             glm_results = GLMResults(glm_model, betas[cat], normalized_cov_params=None, scale=None)
             models[cat] = glm_results
             
-        etas = {c:np.clip(m.predict(which='linear'), -709, 709) for c,m in models.items()}
+        # Get weights for each sample, depending on its class -> combat dataset imbalance
+        class_weights = {}
+        for r in self.data.group_by(y_label).agg(pl.len()).rows():
+            class_weights[r[0]] = len(self.data)/((len(betas)+1)*r[1])  
+        sample_weights = self.data.with_columns(__sample_weight=pl.col(y_label).replace_strict(class_weights, return_dtype=pl.Float64))['__sample_weight'].to_numpy()
+        ##NORM WEIGHTS TO SUM TO LEN OF DATA#sample_weights = sample_weights/np.sum(sample_weights)*len(self.data)
+
+            
+        etas = {c:np.clip(m.predict(which='linear'), -709, 305) for c,m in models.items()}
         denom = 1 + sum(np.exp(eta) for eta in etas.values())
         
-        mus = {c:np.exp(eta)/denom for c,eta in etas.items()}
-        
-        def sigmoid(x):
-            return 1 / (1 + np.exp(-x))
-        
+        #update_mus = {c:np.clip(m.predict(), -709, 709) for c,m in models.items()}
+        #update_mus = {c:model.family.link.inverse(etas[c]) for c,model in models.items()}
+        #update_dmu_deta = {c:mu*(1-mu) for c,mu in update_mus.items()}
+ 
+        mus = {c:np.clip(np.exp(eta)/denom,1e-15,1-1e-15) for c,eta in etas.items()}
         dmu_deta = {c:mu*(1-mu) for c,mu in mus.items()}
+        
         
         for cat in dmu_deta.keys():
             y = data.to_pandas()[cat]
             y = y.to_numpy().astype(float)
             
-            z = etas[cat] + (y - mus[cat])/np.clip(dmu_deta[cat],1e-12,None)
-            W = np.diag((dmu_deta[cat]**2)/max(np.var(mus[cat]), 1e-8))
-            #W = np.diag(dmu_deta[cat])
+            z = etas[cat] + (y - mus[cat])/dmu_deta[cat]
             
-            xwx = X.T @ W @ X
-            xwz = X.T @ W @ z
+            #z = etas[cat] + (y - mus[cat])/np.clip(dmu_deta[cat],1e-12,None)
+            #z = new_etas[cat] + (y - mus[cat])/dmu_deta[cat]
+            
+            W = np.diag((dmu_deta[cat]**2)/max(np.var(mus[cat]), 1e-15))
+            
+            #print(np.ones_like(dmu_deta[cat].shape).shape)
+            # print((dmu_deta[cat]**2).reshape(1,-1).shape)
+            
+            # print(np.ones_like(dmu_deta[cat]).reshape(-1,1).shape)
+            
+            #W = np.diag(mus[cat]) - mus[cat].T @ mus[cat]
+            
+            #W = sample_weights * W
+            
+            #W = (len(cat_count)-1)*(cat_count[cat]/sum(cat_count.values()))*W
+            
+            xw = X.T @ W
+            xwx = xw @ X
+            xwz = xw @ z
             
             results[cat] = (xwx, xwz)
         
@@ -906,10 +931,7 @@ class Client:
         z = eta + (y - mu)/dmu_deta
         W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
         
-        # Tikhonov regularization
-        
         xwx = X.T @ W @ X
-        #r1 = r1 + self.tikhonov_lambda * np.eye(r1.shape[0])
         xwz = X.T @ W @ z
     
         return xwx, xwz, deviance, llf, rss, len(y)
@@ -959,6 +981,12 @@ class LikelihoodRatioTest:
         
         return p_val
     
+    def __lt__(self, x):
+        return len(self.s_labels) < len(x.s_labels) or \
+            self.y_label < x.y_label or \
+            self.x_label < x.x_label or \
+            tuple(sorted(self.s_labels)) < tuple(sorted(x.s_labels))
+    
 class EmptyLikelihoodRatioTest(LikelihoodRatioTest):
     def __init__(self, y_label, x_label, s_labels, p_val):
         self.y_label = y_label
@@ -990,14 +1018,17 @@ class CategoricalLikelihoodRatioTest(LikelihoodRatioTest):
         
         p_val = stats.chi2.sf(t, t1_dof-t0_dof)
         
-        if self.y_label == 'Y' and self.x_label == 'X' and len(self.s_labels) > 0 and self.s_labels[0] == 'Z':
-            print(f'Regressing {self.y_label} ~ {self.x_label} + {self.s_labels}')
-            print('T0', self.t0)
-            print('T1', self.t1)
-            print(f'Num Categories: {num_cats}')
-            print(f'T0 llf: {t0_llf}, T1 llf: {t1_llf}')
-            print(f'DOF M0: {t0_dof}, DOF M1: {t1_dof} -> Test DOF = {t1_dof-t0_dof}')
-            print(f'Test Statistic: {t}, p val: {p_val}')
+        
+        #print(p_val, t, t0_llf, t1_llf, t0_dof, t1_dof)
+        
+        # if self.y_label == 'Y' and self.x_label == 'X' and len(self.s_labels) > 0 and self.s_labels[0] == 'Z':
+        #     print(f'Regressing {self.y_label} ~ {self.x_label} + {self.s_labels}')
+        #     print('T0', self.t0)
+        #     print('T1', self.t1)
+        #     print(f'Num Categories: {num_cats}')
+        #     print(f'T0 llf: {t0_llf}, T1 llf: {t1_llf}')
+        #     print(f'DOF M0: {t0_dof}, DOF M1: {t1_dof} -> Test DOF = {t1_dof-t0_dof}')
+        #     print(f'Test Statistic: {t}, p val: {p_val}')
         
         return p_val
     
@@ -1065,6 +1096,8 @@ class SymmetricLikelihoodRatioTest:
         #return f"SymmetricLikelihoodRatioTest - v0: {self.label1}, v1: {self.label2}, conditioning set: {self.conditioning_set}"
         return f"SymmetricLikelihoodRatioTest - v0: {self.y_label}, v1: {self.x_label}, conditioning set: {self.s_labels}, p: {self.p_val}\n\t-{self.lrt0}\n\t-{self.lrt1}"
     
+    def __lt__(self, x):
+        return self.lrt0 < x.lrt0 or (not self.lrt0 < x.lrt0 and self.lrt1 < x.lrt1)
     
 # Helper Functions
     
