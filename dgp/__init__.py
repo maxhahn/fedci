@@ -1,6 +1,7 @@
 import random
 import numpy as np
 import polars as pl
+import polars.selectors as cs
 
 def uniform_sample():
     v = np.random.uniform(-0.8,1)
@@ -63,18 +64,20 @@ class Node:
         return self.value
     
     def reset(self):
-        self.coefficients = [uniform_sample() for _ in self.parents]
-        self.intercept = uniform_sample()
         self.value = None
-        #for p in self.parents:
-        #    p.()
         
     def _calc(self, num_samples):
         val = pl.Series(name=self.name, values=np.random.normal(0,1, num_samples))
         if len(self.parents) > 0:
-            val += self.intercept 
-            for parent, coeff in zip(self.parents, self.coefficients):
-                val += parent.get(num_samples).cast(pl.Float64)*coeff
+            val += uniform_sample()
+            for parent in self.parents:
+                coefficients = uniform_sample()
+                data = parent.get(num_samples)
+                if data.dtype == pl.Utf8:
+                    coeff_map = {cat: uniform_sample() for cat in data.unique().to_list()}
+                    coefficients = data.replace_strict(coeff_map).rename('coeffs')
+                
+                val += data.cast(pl.Float64)*coefficients
             
         return val
     
