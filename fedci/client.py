@@ -195,12 +195,11 @@ class OrdinalComputationUnit(ComputationUnit):
 
         llf = 0
         llf_saturated = 0
-        reference_level_indices = np.ones(len(data))
         # Calculate data for Y=1
         level, mu0 = model_list[0]
         level_int = int(level.split('__ord__')[-1])
-        current_level_indices = data[y_label].to_numpy() <= level_int
-        reference_level_indices = reference_level_indices * (1-current_level_indices)
+        current_level_indices = data[y_label].to_numpy() == level_int
+        reference_level_indices = 1-current_level_indices
         llf += np.sum(np.log(np.take(mu0, current_level_indices.nonzero()[0])))
         #llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
         
@@ -213,9 +212,8 @@ class OrdinalComputationUnit(ComputationUnit):
             
             # update reference category indices
             level_int = int(level.split('__ord__')[-1])
-            current_level_indices = data[y_label].to_numpy() <= level_int
+            current_level_indices = data[y_label].to_numpy() == level_int
             reference_level_indices = reference_level_indices * (1-current_level_indices)
-            
             # LLF
             llf += np.sum(np.log(np.take(mu_diff, current_level_indices.nonzero()[0])))
             #llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
@@ -224,7 +222,6 @@ class OrdinalComputationUnit(ComputationUnit):
         _, mu1 = model_list[-1]
         llf += np.sum(np.log(np.take(np.clip(1-mu1, 1e-15, 1-1e-15), reference_level_indices.nonzero()[0])))
         #llf_saturated += np.sum(reference_level_indices * np.log(np.clip(reference_level_indices, 1e-10, None)))
-        
         deviance = 2 * (llf_saturated - llf)
         
         return {
