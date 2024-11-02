@@ -144,13 +144,12 @@ class CategoricalComputationUnit(ComputationUnit):
             results[category] = {'xwx': xwx, 'xwz': xwz}
             
             # LLF
-            llf += np.sum(np.log(np.take(mus[category], np.nonzero(y))))
-            
+            llf += np.sum(np.log(np.take(mus[category], np.nonzero(y)[0])))
             ## LLF SATURATED (for deviance)
             llf_saturated += np.sum(y * np.log(np.clip(y, 1e-10, None)))
             
         # LLF
-        llf += np.sum(np.log(np.take(mus[category], reference_category_indices.nonzero())))
+        llf += np.sum(np.log(np.take(1/denom, reference_category_indices.nonzero()[0])))
             
         ## LLF SATURATED (for deviance)
         llf_saturated += np.sum(reference_category_indices * np.log(np.clip(reference_category_indices, 1e-10, None)))
@@ -175,7 +174,7 @@ class OrdinalComputationUnit(ComputationUnit):
         results = {}
         for level in betas.keys():
             level_int = int(level.split('__ord__')[-1])
-            y = data.with_columns(pl.col(y_label) > level_int).to_pandas()[y_label]
+            y = data.with_columns(pl.col(y_label) <= level_int).to_pandas()[y_label]
             y = y.to_numpy().astype(float)
             
             models[level] = ComputationHelper.get_regression_model(
@@ -184,7 +183,7 @@ class OrdinalComputationUnit(ComputationUnit):
                 beta=betas[level],
                 glm_family=family.Binomial()
             )
-                    
+
             current_result = ComputationHelper.run_model(
                 y=y,
                 X=X,
@@ -192,30 +191,39 @@ class OrdinalComputationUnit(ComputationUnit):
             )
             results[level] = {'xwx': current_result['xwx'], 'xwz': current_result['xwz']}
         
-        model_list = [(level, model) for level, model in sorted(models.items(), key=lambda lvl: int(lvl[0].split('__ord__')[-1]))]
+        model_list = [(level, model.predict()) for level, model in sorted(models.items(), key=lambda lvl: int(lvl[0].split('__ord__')[-1]))]
 
-        llf = model_list[-1][1].llf # GET LLF FOR P(K=1)
+        llf = 0
         llf_saturated = 0
         reference_level_indices = np.ones(len(data))
-        for i in reversed(range(1,len(model_list))): # reverse so mu0 = P(Y>0) at the end
-            _, m0 = model_list[i-1]
-            level, m1 = model_list[i]
+        # Calculate data for Y=1
+        level, mu0 = model_list[0]
+        level_int = int(level.split('__ord__')[-1])
+        current_level_indices = data[y_label].to_numpy() <= level_int
+        reference_level_indices = reference_level_indices * (1-current_level_indices)
+        llf += np.sum(np.log(np.take(mu0, current_level_indices.nonzero()[0])))
+        #llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
+        
+        # Running P(Y=k) = P(Y<=k) - P(Y<=k-1) for k=1...M-1
+        for i in range(1,len(model_list)):
+            _, mu0 = model_list[i-1]
+            level, mu1 = model_list[i]
             
-            mu0 = m0.predict()
-            mu1 = m1.predict()
-            mu_diff = np.clip(mu0 - mu1, 1e-15, 1-1e-15)
+            mu_diff = np.clip(mu1 - mu0, 1e-15, 1-1e-15)
             
             # update reference category indices
             level_int = int(level.split('__ord__')[-1])
-            current_level_indices = data[y_label].to_numpy() > level_int
+            current_level_indices = data[y_label].to_numpy() <= level_int
             reference_level_indices = reference_level_indices * (1-current_level_indices)
             
             # LLF
-            llf += np.sum(np.log(np.take(mu_diff, current_level_indices)))
-            llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
-        # Add LLF for k=0
-        llf += np.sum(np.log(np.take(np.clip(1-mu0, 1e-15, 1-1e-15), reference_level_indices.nonzero())))
-        llf_saturated += np.sum(current_level_indices * np.log(np.clip(reference_level_indices, 1e-10, None)))
+            llf += np.sum(np.log(np.take(mu_diff, current_level_indices.nonzero()[0])))
+            #llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
+
+        # Calculate data for Y=M
+        _, mu1 = model_list[-1]
+        llf += np.sum(np.log(np.take(np.clip(1-mu1, 1e-15, 1-1e-15), reference_level_indices.nonzero()[0])))
+        #llf_saturated += np.sum(reference_level_indices * np.log(np.clip(reference_level_indices, 1e-10, None)))
         
         deviance = 2 * (llf_saturated - llf)
         

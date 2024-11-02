@@ -67,7 +67,7 @@ class Test():
         return len(self.tests)*(len(self.X_labels) + 2)
     
     def get_llf(self, client_subset=None):
-        if client_subset is None:
+        if client_subset is not None:
             return sum([llf for client_id, llf in self.llf.items() if client_id in client_subset])
         return sum([llf for llf in self.llf.values()]) if self.llf is not None else 0
     
@@ -97,7 +97,7 @@ class Test():
             
     def __repr__(self):
         test_string = "\n\t- "  + "\n\t- ".join([str(t) for t in sorted(self.tests.values())])
-        return f'Test to predict {self.y_label}:{test_string}'
+        return f'Test - predicting {self.y_label}, llf: {self.get_llf()}, deviance: {self.deviance}{test_string}'
     
     def __lt__(self, other):
         req_labels = self.get_required_labels()
@@ -144,7 +144,7 @@ class TestEngine():
             for variable_set in powerset_of_regressors:
                 for _var, expressions in category_expressions.items():
                     if _var in variable_set:
-                        variable_set = (set(variable_set) - {_var}) | set(sorted(list(expressions)[:-1])) # [1:] to drop first cat
+                        variable_set = (set(variable_set) - {_var}) | set(sorted(list(expressions)[1:])) # [1:] to drop first cat
                 expanded_powerset_of_regressors.append(variable_set)
             powerset_of_regressors = expanded_powerset_of_regressors
             
@@ -156,7 +156,7 @@ class TestEngine():
                                    for x_vars in powerset_of_regressors])
             elif schema[y_var] == VariableType.CATEGORICAL:
                 assert y_var in category_expressions, f'Categorical variable {y_var} is not in expression mapping'
-                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)), y_labels=category_expressions[y_var][:-1])
+                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)), y_labels=category_expressions[y_var][1:])
                                    for x_vars in powerset_of_regressors])
             elif schema[y_var] == VariableType.ORDINAL:
                 assert y_var in ordinal_expressions, f'Ordinal variable {y_var} is not in expression mapping'

@@ -1,1 +1,1 @@
-from .helper import run_test, run_configured_test
+from .helper import run_test, run_configured_test, run_test_on_data
