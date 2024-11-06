@@ -161,8 +161,6 @@ class CategoricalComputationUnit(ComputationUnit):
             'beta_update_data': results
         }
         
-
-# TODO: take away highest ordinal
 class OrdinalComputationUnit(ComputationUnit):
     @staticmethod
     def compute(data, y_label, X_labels, betas):
@@ -174,8 +172,8 @@ class OrdinalComputationUnit(ComputationUnit):
         results = {}
         for level in betas.keys():
             level_int = int(level.split('__ord__')[-1])
-            y = data.with_columns(pl.col(y_label) <= level_int).to_pandas()[y_label]
-            y = y.to_numpy().astype(float)
+            y = data.to_pandas()[y_label]
+            y = (y.to_numpy() <= level_int).astype(float)
             
             models[level] = ComputationHelper.get_regression_model(
                 y=y,
@@ -183,7 +181,6 @@ class OrdinalComputationUnit(ComputationUnit):
                 beta=betas[level],
                 glm_family=family.Binomial()
             )
-
             current_result = ComputationHelper.run_model(
                 y=y,
                 X=X,
@@ -191,7 +188,8 @@ class OrdinalComputationUnit(ComputationUnit):
             )
             results[level] = {'xwx': current_result['xwx'], 'xwz': current_result['xwz']}
         
-        model_list = [(level, model.predict()) for level, model in sorted(models.items(), key=lambda lvl: int(lvl[0].split('__ord__')[-1]))]
+        model_list = [(level, model.predict()) for level, model
+                      in sorted(models.items(), key=lambda lvl: int(lvl[0].split('__ord__')[-1]))]
 
         llf = 0
         llf_saturated = 0
@@ -217,7 +215,6 @@ class OrdinalComputationUnit(ComputationUnit):
             # LLF
             llf += np.sum(np.log(np.take(mu_diff, current_level_indices.nonzero()[0])))
             #llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
-
         # Calculate data for Y=M
         _, mu1 = model_list[-1]
         llf += np.sum(np.log(np.take(np.clip(1-mu1, 1e-15, 1-1e-15), reference_level_indices.nonzero()[0])))
@@ -284,7 +281,6 @@ class Client():
         
         result = regression_computation_map[self.schema[y_label]].compute(self.expanded_data, y_label, X_labels, beta)
         
-        # TODO rewrap result
         if self.schema[y_label] in [VariableType.CONTINUOS, VariableType.BINARY]:
             response: ClientResponseData = ClientResponseData(
                 llf=result['llf'],

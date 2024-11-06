@@ -38,7 +38,7 @@ class RegressionTest():
         return f'RegressionTest {self.y_label} ~ {", ".join(self.X_labels + ["1"])} - beta: {self.beta}'
 
 class Test():
-    def __init__(self, y_label, X_labels: List[str], y_labels: List[str] = None):
+    def __init__(self, y_label, X_labels: List[str], y_labels: List[str] = None, max_iterations=25):
         self.y_label = y_label
         self.X_labels = X_labels
         if y_labels is None: y_labels = [y_label]
@@ -47,11 +47,18 @@ class Test():
         self.last_deviance = None
         self.deviance = 0
         self.iterations = 0
+        self.max_iterations = max_iterations
+        
+    def is_finished(self):
+        return self.get_relative_change_in_deviance() < 1e-8 or self.iterations >= self.max_iterations
 
     def update_betas(self, data: Dict[str, ClientResponseData]):
         self.llf = {client_id: client_response.llf for client_id, client_response in data.items()}
         self.last_deviance = self.deviance
         self.deviance = sum(client_response.deviance for client_response in data.values())
+        
+        if self.is_finished():
+            return
         
         beta_update_data = [client_response.beta_update_data for client_response in data.values()]
         # Transform data from list of dicts to dict of lists => all data for one y_label grouped together
@@ -149,18 +156,18 @@ class TestEngine():
             powerset_of_regressors = expanded_powerset_of_regressors
             
             if schema[y_var] == VariableType.CONTINUOS:
-                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)))
+                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)), max_iterations=max_iterations)
                                    for x_vars in powerset_of_regressors])
             elif schema[y_var] == VariableType.BINARY:
-                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)))
+                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)), max_iterations=max_iterations)
                                    for x_vars in powerset_of_regressors])
             elif schema[y_var] == VariableType.CATEGORICAL:
                 assert y_var in category_expressions, f'Categorical variable {y_var} is not in expression mapping'
-                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)), y_labels=category_expressions[y_var][1:])
+                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)), y_labels=category_expressions[y_var][1:], max_iterations=max_iterations)
                                    for x_vars in powerset_of_regressors])
             elif schema[y_var] == VariableType.ORDINAL:
                 assert y_var in ordinal_expressions, f'Ordinal variable {y_var} is not in expression mapping'
-                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)), y_labels=ordinal_expressions[y_var][:-1])
+                self.tests.extend([Test(y_label=y_var, X_labels=sorted(list(x_vars)), y_labels=ordinal_expressions[y_var][:-1], max_iterations=max_iterations)
                                    for x_vars in powerset_of_regressors])
             else:
                 raise Exception(f'Unknown variable type {schema[y_var]} encountered!')
@@ -188,5 +195,5 @@ class TestEngine():
             return
         current_test = self.tests[self.current_test_index]
         current_test.update_betas(client_responses)
-        if current_test.get_relative_change_in_deviance() < 1e-8 or current_test.iterations >= self.max_iterations:
+        if current_test.is_finished():
             self.current_test_index += 1

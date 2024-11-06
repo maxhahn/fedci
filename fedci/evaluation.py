@@ -73,7 +73,12 @@ class SymmetricLikelihoodRatioTest():
         self.v0, self.v1 = sorted([lrt0.y_label, lrt1.y_label])
         self.conditioning_set = sorted(lrt0.s_labels)
         
-        self.p_val = min(2*min(self.lrt0.p_val, self.lrt1.p_val), max(self.lrt0.p_val, self.lrt1.p_val))
+        if lrt0.p_val == float('NaN'):
+            self.p_val = lrt1.p_val
+        elif lrt1.p_val == float('NaN'):
+            self.p_val = lrt0.p_val
+        else:
+            self.p_val = min(2*min(self.lrt0.p_val, self.lrt1.p_val), max(self.lrt0.p_val, self.lrt1.p_val))
         
     def __repr__(self):
         return f"SymmetricLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val}\n\t- {self.lrt0}\n\t- {self.lrt1}"
@@ -200,8 +205,6 @@ def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_tru
     p_values = []
     for test, gt_test in zip(sorted(tests), sorted(ground_truth_tests)):
         if test != gt_test:
-            print(test)
-            print(gt_test)
             raise Exception('Mismatched tests in sorted zip. This should not happen when all tests are present.')
         p_values.append((test.p_val, gt_test.p_val))
     return [p_vals[0] for p_vals in p_values], [p_vals[1] for p_vals in p_values]

@@ -3,6 +3,7 @@ import copy
 import fcntl
 import json
 from pathlib import Path
+import numpy as np
 
 from dgp import NodeCollection
 
@@ -30,10 +31,11 @@ def write_result(result, directory, file):
         fcntl.flock(f, fcntl.LOCK_EX)
         f.write(json.dumps(result) + '\n')
         fcntl.flock(f, fcntl.LOCK_UN)
-        
-def run_configured_test(config):
+
+def run_configured_test(config, seed=None):
     node_collection, num_samples, num_clients, target_directory, target_file = config
-    
+    if seed is not None:
+        np.random.seed(seed)
     return run_test(dgp_nodes=node_collection,
                     num_samples=num_samples,
                     num_clients=num_clients,

@@ -8,7 +8,8 @@ def uniform_sample():
     v = v if v > 0.1 else v - 0.2
     return v
 
-def get_quantiles(num_cats, min_perc_per_cat):
+def get_quantiles2(num_cats, min_perc_per_cat):
+    assert num_cats*min_perc_per_cat <= 1.0
     num_objects = int((1.0-num_cats*min_perc_per_cat)*100)
 
     containers = [[] for _ in range(num_cats)]
@@ -19,17 +20,25 @@ def get_quantiles(num_cats, min_perc_per_cat):
         random.choice(containers).append(object)
         
     containers = [sum(c)/100 for c in containers]
-    containers
-
-
     containers = [c+min_perc_per_cat for c in containers]
-    #assert sum(containers) == 1
 
     quantiles = [containers[0]]
     for i in range(1,len(containers)-1):
         quantiles.append(containers[i] + quantiles[-1])
         
+
     return quantiles
+
+def get_quantiles(num_cats, min_perc_per_cat):
+    assert min_perc_per_cat >= 0 and min_perc_per_cat <= 1
+    assert num_cats*min_perc_per_cat <= 1.0
+    
+    remaining_perc = 1-num_cats*min_perc_per_cat
+    quantiles = np.ones(num_cats-1) * min_perc_per_cat
+    quantiles = np.cumsum(quantiles)
+    randomness_vector = np.random.uniform(0,1,num_cats-1)
+    quantiles = quantiles + remaining_perc*(np.cumsum(randomness_vector)/np.sum(np.cumsum(randomness_vector)))
+    return quantiles.tolist()
 
 def to_categorical(c, quantiles):
     return c.qcut(quantiles, labels=[str(i) for i in range(1,len(quantiles)+2)])
@@ -68,16 +77,17 @@ class Node:
         
     def _calc(self, num_samples):
         val = pl.Series(name=self.name, values=np.random.normal(0,1, num_samples))
-        if len(self.parents) > 0:
-            val += uniform_sample()
-            for parent in self.parents:
-                coefficients = uniform_sample()
-                data = parent.get(num_samples)
-                if data.dtype == pl.Utf8:
-                    coeff_map = {cat: uniform_sample() for cat in data.unique().to_list()}
-                    coefficients = data.replace_strict(coeff_map).rename('coeffs')
-                
-                val += data.cast(pl.Float64)*coefficients
+        if len(self.parents) == 0:
+            return val
+        
+        val += uniform_sample() # intercept
+        for parent in self.parents:
+            coefficients = uniform_sample()
+            data = parent.get(num_samples)
+            if data.dtype == pl.Utf8:
+                coeff_map = {cat: uniform_sample() for cat in data.unique().to_list()}
+                coefficients = data.replace_strict(coeff_map).rename('coeffs')
+            val += data.cast(pl.Float64)*coefficients
             
         return val
     
@@ -109,14 +119,11 @@ class OrdinalNode(Node):
         return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32)
     
 class BinaryNode(Node):
-    def __init__(self, name, parents=[], min_percent_per_category=0.15):
+    def __init__(self, name, parents=[]):
         super().__init__(name, parents)
         
-        self.num_categories = 2
-        self.min_percent_per_category = min_percent_per_category
-        
     def _calc(self, num_samples):
-        quantiles = get_quantiles(self.num_categories, self.min_percent_per_category)
+        quantiles = get_quantiles(2, 0.3)
         return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32) == 1
 
 class GenericNode(Node):
