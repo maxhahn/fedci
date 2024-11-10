@@ -71,13 +71,17 @@ COPY ./rIOD /rIOD
 WORKDIR /rIOD
 
 # Install FCI Utils
-RUN R CMD INSTALL imports/FCI.Utils_1.0.tar.gz
+RUN R CMD INSTALL /rIOD/imports/FCI.Utils_1.0.tar.gz
 
 # Build and install rIOD package
-RUN R CMD build .
-RUN R CMD INSTALL rIOD_1.0.tar.gz
+RUN R CMD build /rIOD
+RUN R CMD INSTALL /rIOD/rIOD_1.0.tar.gz
 
+WORKDIR /
 RUN rm -r /rIOD
+
+# Install ssh client for git credential passthrough
+RUN apt-get update && apt-get install -y openssh-client
 
 ARG USERNAME=dev
 RUN useradd -m -s /bin/bash $USERNAME || true

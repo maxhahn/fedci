@@ -24,12 +24,12 @@
   // Mount your source code
   // fix SELinux permission problem when mounting
   // --> No idea why workspaceFolder is not default when logging on
-  "workspaceMount": "",
-  "workspaceFolder": "/workspace",
-  "runArgs": [
-    // other args
-    "--volume=${localWorkspaceFolder}:/workspace/${localWorkspaceFolderBasename}:Z"
-  ],
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,Z",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  //"runArgs": [
+  //  // other args
+  //  "--volume=${localWorkspaceFolder}:/workspaces/${localWorkspaceFolderBasename}:Z"
+  //],
 
   // Use specific user to avoid file permission issues
   "remoteUser": "dev",
