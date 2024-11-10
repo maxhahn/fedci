@@ -8,3 +8,4 @@
 **.ndjson
 **__pycache__
 .devpod-internal
+.zed_server
