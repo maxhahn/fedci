@@ -1,23 +1,23 @@
 # About this Project
 
-This projects aims to create an accessible platform and user interface to obtain causal knowledge from distributed datasets.  
-Different parties can share key insights about their data without compromising their privacy.  
+This projects aims to create an accessible platform and user interface to obtain causal knowledge from distributed datasets.
+Different parties can share key insights about their data without compromising their privacy.
 Results come in the form of causal graphs (PAGs).
 
-There are two main algorithm this paper supports:  
+There are two main algorithm this paper supports:
 * rIOD
 * FedGLM
 
 ## General
 
-This application is made up of two main components.  
+This application is made up of two main components.
 There is a streamlit UI and a litestar server.
 
 Via the streamlit UI, one can connect to an existing server instance and run distributed/federated algorithms with peers connected to the same server.
 
 It is designed to be easily self-hostable, and is fully contained within a docker container.
 
-**Beware**: As of now, this client-server architecture communicates via http (_not_ https!).  
+**Beware**: As of now, this client-server architecture communicates via http (_not_ https!).
 As such a malicious agent may spoof your identity or steal data that is transmitted over the network.
 
 When hosting this application, you may use a reverse-proxy and your own SSL certificates to enable https.
@@ -26,14 +26,14 @@ When hosting this application, you may use a reverse-proxy and your own SSL cert
 
 This project implements the IOD algorithm created by [Tillman and Spirtes](http://proceedings.mlr.press/v15/tillman11a.html).
 
-When running rIOD, (conditional) independence tests are performed and the resulting p-values are transmitted to the server.  
+When running rIOD, (conditional) independence tests are performed and the resulting p-values are transmitted to the server.
 On the server-side, these p-values are aggregated to give insights about the independences in the distributed dataset.
 
 rIOD only supports numerical (float) features.
-As per the IOD algorithm, not all participating parties have to have identical features in their dataset.  
+As per the IOD algorithm, not all participating parties have to have identical features in their dataset.
 
-Without code modifications, this application will only ever transmit p-values and PAG adjacency matrices over the network.  
-The original dataset is kept completely private and is never transmitted over the network.  
+Without code modifications, this application will only ever transmit p-values and PAG adjacency matrices over the network.
+The original dataset is kept completely private and is never transmitted over the network.
 (This can be easily checked inside the source code)
 
 ## FedGLM
@@ -53,17 +53,17 @@ First, install docker and docker-compose.
 
 Use the following commands to build and run the application:
 
-* Run client and server on same machine:  
+* Run client and server on same machine:
 `docker-compose up`
 
-* Run client or server only:  
-`docker-compuse up client`  
+* Run client or server only:
+`docker-compuse up client`
 `docker-compose up server`
 
-* The client can be accessed via `localhost:8081` on the host machine.  
+* The client can be accessed via `localhost:8081` on the host machine.
 When hosting the client on a machine within the same network, use it's ip address and ensure proper connectivity between the two machines.
 
-* The first step within the client is to connect to a server.  
+* The first step within the client is to connect to a server.
 A server hosted by us can be used with the following URL: `heiderlab.com:8080`
 
 ## Configuration
@@ -71,4 +71,4 @@ A server hosted by us can be used with the following URL: `heiderlab.com:8080`
 No major changes of this setup should be required.
 All configurations can be changed in `docker-compose.yml`.
 
-The only reasonable change is the port mapping, if your host machine requires specific ports to be exposed. 
+The only reasonable change is the port mapping, if your host machine requires specific ports to be exposed.

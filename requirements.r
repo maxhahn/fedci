@@ -1,0 +1,17 @@
+tidyverse
+MXM
+pscl
+dagitty
+DOT
+rsvg
+BFF
+BiocManager
+graph
+RGBL
+Rgraphviz
+rje
+pcalg
+jsonlite
+lavaan
+doFuture
+gtools

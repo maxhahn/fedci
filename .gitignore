@@ -7,3 +7,4 @@
 **.parquet
 **.ndjson
 **__pycache__
+.devpod-internal

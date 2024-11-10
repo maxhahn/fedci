@@ -1,0 +1,11 @@
+pandas
+polars
+graphviz
+rpy2
+litestar[standard]
+streamlit
+extra-streamlit-components
+streamlit-extras
+streamlit-autorefresh
+statsmodels
+scipy
