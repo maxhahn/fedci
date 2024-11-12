@@ -1,7 +1,7 @@
 import dgp
 from fedci import run_test, run_configured_test, run_test_on_data
 from tqdm import tqdm
-from tqdm.contrib.concurrent import thread_map
+from tqdm.contrib.concurrent import process_map
 import itertools
 
 # Setup Data
@@ -154,6 +154,6 @@ num_runs = 5
 configurations *= num_runs
 
 # Run tests
-#thread_map(run_configured_test, configurations, max_workers=4, chunksize=10)
-for i, configuration in enumerate(tqdm(configurations)):
-    run_configured_test(configuration)
+process_map(run_configured_test, configurations, max_workers=5, chunksize=10)
+#for i, configuration in enumerate(tqdm(configurations)):
+#    run_configured_test(configuration)

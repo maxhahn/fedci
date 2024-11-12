@@ -83,6 +83,10 @@ RUN rm -r /rIOD
 # Install ssh client for git credential passthrough
 RUN apt-get update && apt-get install -y openssh-client
 
+# More python dependencies for dev
+RUN pip3 install --no-cache-dir tqdm hvplot
+
+
 ARG USERNAME=dev
 RUN useradd -m -s /bin/bash $USERNAME || true
 #RUN mkdir -p /workspace && \
