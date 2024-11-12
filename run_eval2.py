@@ -1,4 +1,7 @@
 import polars as pl
+import hvplot.polars
+import hvplot
+import panel as pn
 import glob
 
 # Load data
@@ -22,7 +25,7 @@ print(df['experiment_type'].value_counts())
 df = df.explode('predicted_p_values', 'true_p_values')
 
 # Plot scatter of p values
-plot = df.plot.scatter(
+plot = df.hvplot.scatter(
     x='predicted_p_values',
     y='true_p_values',
     alpha=0.7,
@@ -34,7 +37,10 @@ plot = df.plot.scatter(
     groupby=['experiment_type', 'num_clients', 'num_samples']
     )
 
-plot.save('images/p_value_scatter.html')
+#hvplot.show(plot, port=8080)
+#hvplot.save(plot, 'images/p_value_scatter.html')
+plot_display = pn.panel(plot).show(port=8080)
+plot_display.stop()
 
 # Plot correlation of p values
 _df = df
@@ -42,14 +48,17 @@ _df = _df.group_by('name', 'experiment_type', 'num_clients', 'num_samples') \
     .agg(pl.corr('predicted_p_values', 'true_p_values')) \
     .rename({'predicted_p_values': 'p_value_correlation'})
 
-plot = _df.sort('num_samples').plot.line(x='num_samples',
+plot = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   y='p_value_correlation',
                                   alpha=0.6,
                                   by='name',
                                   groupby=['experiment_type','num_clients'],
                                   ylim=(0.5,1.001)
                                   )
-plot.save('images/p_value_corr.html')
+#hvplot.show(plot, port=8080)
+#hvplot.save(plot, 'images/p_value_corr.html')
+plot_display = pn.panel(plot).show(port=8080)
+plot_display.stop()
 
 # Plot accuracy
 alpha = 0.05
@@ -64,11 +73,14 @@ _df = _df.with_columns(
 
 _df = _df.group_by('name', 'experiment_type', 'num_clients', 'num_samples').agg((pl.col('tp')+pl.col('tn')).mean().alias('accuracy'))
 
-plot = _df.sort('num_samples').plot.line(x='num_samples',
+plot = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   y='accuracy',
                                   alpha=0.6,
                                   by='name',
                                   groupby=['experiment_type','num_clients'],
                                   ylim=(0.5,1.001)
                                   )
-plot.save('images/p_value_acc.html')
+#hvplot.show(plot, port=8080)
+#hvplot.save(plot, 'images/p_value_acc.html')
+plot_display = pn.panel(plot).show(port=8080)
+plot_display.stop()
