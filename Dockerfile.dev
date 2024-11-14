@@ -84,7 +84,8 @@ RUN rm -r /rIOD
 RUN apt-get update && apt-get install -y openssh-client
 
 # More python dependencies for dev
-RUN pip3 install --no-cache-dir tqdm hvplot
+RUN pip3 install --no-cache-dir tqdm hvplot ipykernel
+RUN python3 -m ipykernel install --user
 
 
 ARG USERNAME=dev

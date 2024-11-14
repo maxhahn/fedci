@@ -1,6 +1,9 @@
+
+# %%
 import polars as pl
 import glob
 
+# %%
 # Load data
 try:
     df = pl.read_ndjson('./experiments/base/*.ndjson', ignore_errors=True)
