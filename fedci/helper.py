@@ -38,7 +38,7 @@ def run_configured_test(config, seed=None):
     if seed is not None:
         np.random.seed(seed)
     if not os.path.exists(target_directory):
-        os.makedirs(target_directory)
+        os.makedirs(target_directory, exist_ok=True)
     target_file = f'{os.getpid()}-{target_file}'
     return run_test(dgp_nodes=node_collection,
                     num_samples=num_samples,
