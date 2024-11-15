@@ -158,5 +158,43 @@ configurations *= num_runs
 #process_map(run_configured_test, configurations, max_workers=5, chunksize=10)
 #for i, configuration in enumerate(tqdm(configurations[:1], disable=True)):
 #    run_configured_test(configuration, 2)
-for i in range(20):
-    run_configured_test(configurations[0], i)
+#for i in range(20):
+#    run_configured_test(configurations[0], 2)
+#run_configured_test(configurations[0], 2)
+import polars as pl
+df = pl.read_parquet("./error-data-01.parquet")
+run_test_on_data(
+    df,
+    "test-data",
+    1,
+    "",
+    ""
+)
+
+import pandas as pd
+import statsmodels.api as sm
+
+def run_mnlogit(df, y_var, x_vars):
+    # Prepare X matrix with constant
+    X = sm.add_constant(df[x_vars])
+
+    # Prepare y variable
+    y = df[y_var]
+
+    # Fit the model
+    model = sm.MNLogit(y, X)
+    results = model.fit()
+
+    # Get coefficients as DataFrame
+    coef_df = pd.DataFrame(results.params)
+
+    return coef_df, results.llf
+
+print("On Intercept")
+r = run_mnlogit(df.to_pandas(), "X", [])
+print(r[0])
+print("llf", r[1])
+print("On Y,1")
+r = run_mnlogit(df.to_pandas(), "X", ["Y"])
+print(r[0])
+print("llf", r[1])

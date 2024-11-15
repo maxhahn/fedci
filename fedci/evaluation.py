@@ -35,6 +35,12 @@ class LikelihoodRatioTest():
         t1_dof = t1.get_degrees_of_freedom()
 
         p_val = scipy.stats.chi2.sf(2*(t1_llf - t0_llf), t1_dof-t0_dof)
+
+        if DEBUG >= 1:
+            print(f'*** Calculating p value for independence of {self.y_label} from {self.x_label} given {self.s_labels}')
+            print(f'{t1_dof-t0_dof} DOFs = {t1_dof} T1 DOFs - {t0_dof} T0 DOFs')
+            print(f'{2*(t1_llf - t0_llf):.4f} Test statistic = 2*({t1_llf:.4f} T1 LLF - {t0_llf:.4f} T0 LLF)')
+            print(f'p value = {p_val:.6f}')
         return p_val
 
     def __repr__(self):
@@ -74,12 +80,7 @@ class SymmetricLikelihoodRatioTest():
         self.v0, self.v1 = sorted([lrt0.y_label, lrt1.y_label])
         self.conditioning_set = sorted(lrt0.s_labels)
 
-        if lrt0.p_val == float('NaN'):
-            self.p_val = lrt1.p_val
-        elif lrt1.p_val == float('NaN'):
-            self.p_val = lrt0.p_val
-        else:
-            self.p_val = min(2*min(self.lrt0.p_val, self.lrt1.p_val), max(self.lrt0.p_val, self.lrt1.p_val))
+        self.p_val = min(2*min(self.lrt0.p_val, self.lrt1.p_val), max(self.lrt0.p_val, self.lrt1.p_val))
 
     def __repr__(self):
         return f"SymmetricLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val}\n\t- {self.lrt0}\n\t- {self.lrt1}"

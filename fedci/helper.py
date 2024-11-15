@@ -59,6 +59,7 @@ def run_test(dgp_nodes: NodeCollection,
     dgp_nodes = copy.deepcopy(dgp_nodes)
     dgp_nodes.reset()
     data = dgp_nodes.get(num_samples)
+    #data.write_parquet("./error-data-01.parquet")
 
     return run_test_on_data(data,
                             dgp_nodes.name,
@@ -75,6 +76,11 @@ def run_test_on_data(data,
                      target_file,
                      max_regressors=None,
                      ):
+    if DEBUG >= 1:
+        print("*** Data schema")
+        for col, dtype in sorted(data.schema.items(), key=lambda x: x[0]):
+            print(f"{col} - {dtype}")
+
     if not (DEBUG >= 2):
         cb.consolewrite_print = lambda x: None
         cb.consolewrite_warnerror = lambda x: None
