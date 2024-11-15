@@ -71,7 +71,7 @@ COPY ./rIOD /rIOD
 WORKDIR /rIOD
 
 # Install FCI Utils
-RUN R CMD INSTALL /rIOD/imports/FCI.Utils_1.0.tar.gz
+RUN R CMD INSTALL /rIOD/imports/FCI.Utils_1.1.tar.gz
 
 # Build and install rIOD package
 RUN R CMD build /rIOD
