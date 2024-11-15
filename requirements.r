@@ -15,3 +15,4 @@ jsonlite
 lavaan
 doFuture
 gtools
+matrixcalc
