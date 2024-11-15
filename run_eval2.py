@@ -5,13 +5,14 @@ import panel as pn
 import glob
 
 # Load data
+path =  './experiments/expanded_ordinals/*ndjson'
 try:
-    df = pl.read_ndjson('./experiments/base/*.ndjson', ignore_errors=True)
+    df = pl.read_ndjson(path, ignore_errors=True)
 except:
     import json
     ds = []
     len_orig = 0
-    for file in glob.glob('./experiments/base/*'):
+    for file in glob.glob(path):
         with open(file, 'r') as f:
             _ds = f.readlines()
         len_orig = len(_ds)
