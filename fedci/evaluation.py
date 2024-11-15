@@ -194,7 +194,7 @@ def get_riod_tests(data, max_regressors=None):
         y = labels[row[1]-1]
         if x > y:
             x,y = y,x
-        s = [labels[r-1] for r in row[2] if r is not None]
+        s = [str(labels[r-1]) for r in row[2] if r is not None]
         pval = row[3]
         ground_truth_tests.append(EmptyLikelihoodRatioTest(x, y, s, pval))
 
@@ -207,5 +207,12 @@ def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_tru
     for test, gt_test in zip(sorted(tests), sorted(ground_truth_tests)):
         if test != gt_test:
             raise Exception('Mismatched tests in sorted zip. This should not happen when all tests are present.')
+        from .env import DEBUG
+        if DEBUG >= 3 or (DEBUG >= 1 and test.p_val != gt_test.p_val):
+            print('***')
+            print(f'Ground Truth:\n{gt_test}')
+            print('---')
+            print(f'{test.lrt0}')
+            print(f'{test.lrt1}')
         p_values.append((test.p_val, gt_test.p_val))
     return [p_vals[0] for p_vals in p_values], [p_vals[1] for p_vals in p_values]

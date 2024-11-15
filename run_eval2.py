@@ -33,14 +33,14 @@ plot1 = df.hvplot.scatter(
     ylim=(-0.1,1.1),
     xlim=(-0.1,1.1),
     height=400,
-    width=400,
-    #by='name', width=600,
+    #width=400,
+    by='name', width=600,
     groupby=['experiment_type', 'num_clients', 'num_samples']
     )
 
 #hvplot.show(plot, port=8080)
 #hvplot.save(plot, 'images/p_value_scatter.html')
-plot_display = pn.panel(plot1).show(port=8080)
+plot_display = pn.panel(plot1).show(port=40010)
 plot_display.stop()
 
 # Plot correlation of p values
@@ -58,7 +58,7 @@ plot2 = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   )
 #hvplot.show(plot, port=8080)
 #hvplot.save(plot, 'images/p_value_corr.html')
-plot_display = pn.panel(plot2).show(port=8080)
+plot_display = pn.panel(plot2).show(port=40010)
 plot_display.stop()
 
 # Plot accuracy
@@ -83,7 +83,7 @@ plot3 = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   )
 #hvplot.show(plot, port=8080)
 #hvplot.save(plot, 'images/p_value_acc.html')
-plot_display = pn.panel(plot3).show(port=8080)
+plot_display = pn.panel(plot3).show(port=40010)
 plot_display.stop()
 
 #total_plot = (plot1+plot2+plot3).cols(1)

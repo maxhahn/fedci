@@ -11,6 +11,7 @@ from dgp import NodeCollection
 from .server import Server
 from .client import Client
 from .evaluation import get_symmetric_likelihood_tests, get_riod_tests, compare_tests_to_truth
+from .env import DEBUG
 
 import rpy2.rinterface_lib.callbacks as cb
 
@@ -36,6 +37,7 @@ def write_result(result, directory, file):
 def run_configured_test(config, seed=None):
     node_collection, num_samples, num_clients, target_directory, target_file = config
     if seed is not None:
+        if DEBUG >= 1: print(f'Current seed: {seed}')
         np.random.seed(seed)
     if not os.path.exists(target_directory):
         os.makedirs(target_directory, exist_ok=True)
@@ -44,8 +46,7 @@ def run_configured_test(config, seed=None):
                     num_samples=num_samples,
                     num_clients=num_clients,
                     target_directory=target_directory,
-                    target_file=target_file,
-                    write_to_disk=True
+                    target_file=target_file
                     )
 
 def run_test(dgp_nodes: NodeCollection,
@@ -53,9 +54,7 @@ def run_test(dgp_nodes: NodeCollection,
              num_clients,
              target_directory,
              target_file,
-             max_regressors=None,
-             suppress_r_output=True,
-             write_to_disk=True
+             max_regressors=None
              ):
     dgp_nodes = copy.deepcopy(dgp_nodes)
     dgp_nodes.reset()
@@ -66,9 +65,7 @@ def run_test(dgp_nodes: NodeCollection,
                             num_clients,
                             target_directory,
                             target_file,
-                            max_regressors,
-                            suppress_r_output,
-                            write_to_disk
+                            max_regressors
                             )
 
 def run_test_on_data(data,
@@ -77,10 +74,8 @@ def run_test_on_data(data,
                      target_directory,
                      target_file,
                      max_regressors=None,
-                     suppress_r_output=True,
-                     write_to_disk=True
                      ):
-    if suppress_r_output:
+    if not (DEBUG >= 2):
         cb.consolewrite_print = lambda x: None
         cb.consolewrite_warnerror = lambda x: None
 
@@ -105,7 +100,7 @@ def run_test_on_data(data,
         'true_p_values': true_p_values
     }
 
-    if write_to_disk:
+    if DEBUG == 0:
         write_result(result, target_directory, target_file)
 
     return list(zip(sorted(likelihood_ratio_tests), sorted(ground_truth_tests)))
