@@ -15,7 +15,7 @@ except:
     for file in glob.glob(path):
         with open(file, 'r') as f:
             _ds = f.readlines()
-        len_orig = len(_ds)
+        len_orig += len(_ds)
         _ds = [d for d in _ds if 'NaN' not in d]
         _ds = [json.loads(d) for d in _ds]
         ds += _ds

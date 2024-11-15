@@ -3,6 +3,7 @@ from fedci import run_test, run_configured_test, run_test_on_data
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 import itertools
+import random
 
 # Setup Data
 # ## L-B CASE
@@ -136,10 +137,16 @@ node_collections = [
 #node_collections = [nc942]
 num_samples = [
     100, 200, 300, 400,
-    500, 600, 700, 800,
-    900,
-    1000, 1250, 1500,
-    1750, 2000, 2500, 3000
+    500, #600, 700, 800,
+    750,
+    #900,
+    1000,
+    #1250,
+    #1500,
+    #1750,
+    2000,
+    #2500,
+    3000
 ]
 num_clients = [
     1, 3, 5
@@ -153,8 +160,9 @@ configurations = [c + file_info for c in configurations]
 num_runs = 100
 
 configurations *= num_runs
+random.shuffle(configurations)
 
 # Run tests
-process_map(run_configured_test, configurations, max_workers=5, chunksize=10)
+process_map(run_configured_test, configurations, max_workers=5, chunksize=25)
 #for i, configuration in enumerate(tqdm(configurations)):
 #    run_configured_test(configuration)
