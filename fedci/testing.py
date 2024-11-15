@@ -105,7 +105,8 @@ class Test():
 
     def __repr__(self):
         test_string = "\n\t- "  + "\n\t- ".join([str(t) for t in sorted(self.tests.values())])
-        return f'Test - predicting {self.y_label}, llf: {self.get_llf()}, deviance: {self.deviance}{test_string}'
+        test_title = f'{self.y_label} ~ {",".join(list(set([l.split("__")[0] for l in self.X_labels])))},1'
+        return f'Test {test_title} - llf: {self.get_llf()}, deviance: {self.deviance}, {self.iterations}/{self.max_iterations} iterations{test_string}'
 
     def __lt__(self, other):
         req_labels = self.get_required_labels()

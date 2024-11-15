@@ -59,7 +59,6 @@ def run_test(dgp_nodes: NodeCollection,
     dgp_nodes = copy.deepcopy(dgp_nodes)
     dgp_nodes.reset()
     data = dgp_nodes.get(num_samples)
-    #data.write_parquet("./error-data-02.parquet")
 
     return run_test_on_data(data,
                             dgp_nodes.name,

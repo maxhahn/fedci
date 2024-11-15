@@ -130,9 +130,9 @@ node_collections = [
     #nc911, nc912, nc913, nc914,
     #nc921, nc922, nc923, nc924,
     #nc931, nc932, nc933, nc934,
-    nc941, #nc942, nc943, nc944,
+    #nc941, #nc942, nc943, nc944,
     #nc951, nc952,
-    #nc953#, nc954,
+    nc953#, nc954,
 ]
 num_samples = [
     #100, 200, 300, 400,
@@ -158,10 +158,10 @@ configurations *= num_runs
 #for i, configuration in enumerate(tqdm(configurations[:1], disable=True)):
 #    run_configured_test(configuration, 2)
 #for i in range(20):
-#    run_configured_test(configurations[0], i)
-#run_configured_test(configurations[0], 15)
+#    run_configured_test(configurations[0], i+20)
+#run_configured_test(configurations[0], 32)
 import polars as pl
-df = pl.read_parquet("./error-data-02.parquet")
+df = pl.read_parquet("./error-data-03.parquet")
 run_test_on_data(
     df,
     "test-data",
@@ -188,19 +188,17 @@ def run_mnlogit(df, y_var, x_vars):
 
     return coef_df, results.llf
 
-
-def run_binlogit(df, y_var, x_vars):
-
+def run_binlogit(df, y_var, x_vars, sep_xvars=True):
     df = df.sort(x_vars, descending=True)
-    if len(x_vars) > 0:
-        df_x = df[x_vars].to_dummies(x_vars, separator='_ord_', drop_first=True).cast(pl.Int32).to_pandas()
+    if len(x_vars) > 0 and sep_xvars:
+        df_x = df[x_vars].to_dummies(x_vars, separator='__ordx__', drop_first=True).cast(pl.Int32).to_pandas()
     else:
         df_x = df.to_pandas()[x_vars]
-    df = df.to_pandas()
     # Prepare X matrix with constant
     X = sm.add_constant(df_x)
 
     # Prepare y variable (assume binary 0/1)
+    df = df.to_pandas()
     y = df[y_var].astype(int)
 
     # Fit the binary logistic regression model
@@ -212,16 +210,42 @@ def run_binlogit(df, y_var, x_vars):
 
     return coef_df, results.llf
 
-print("On Intercept")
-#r = run_mnlogit(df.to_pandas(), "X", [])
-r = run_binlogit(df, "X", [])
-print(r[0])
-print("llf", r[1])
-print("On Y,1")
-#r = run_mnlogit(df.to_pandas(), "X", ["Y"])
-r = run_binlogit(df, "X", ["Y"])
-print(r[0])
-print("llf", r[1])
+def run_ologit(df, y_var, x_vars):
+    for col,dtype in df.schema.items():
+        if dtype == pl.String:
+            if col in x_vars:
+                df = df.to_dummies(col, separator="__temp__", drop_first=True)
+                x_vars.remove(col)
+                x_vars.extend([c for c in df.columns if c.startswith(f"{col}__")])
+        if dtype == pl.Int32 or dtype == pl.Int64:
+            y_var_new = []
+            for val in df[y_var].unique().to_list()[:-1]:
+                df = df.with_columns((pl.col(y_var) <= val).alias(f"{y_var}__ord__{val}"))
+                y_var_new.append(f"{y_var}__ord__{val}")
+            y_var = y_var_new
+
+    res = []
+    if type(y_var) != list:
+        return None, None
+
+    for _y_var in y_var:
+        r = run_binlogit(df, _y_var, x_vars, sep_xvars=False)
+        res.append((*r, _y_var))
+
+    return [r[0] for r in res], [r[1] for r in res], [r[2] for r in res]
+
+#print("On Z,1")
+##r = run_mnlogit(df.to_pandas(), "X", [])
+##r = run_binlogit(df, "X", [])
+#r = run_ologit(df, "Y", ["Z"])
+#print(r[0])
+#print("llf", r[1])
+#print("On X,Z,1")
+##r = run_mnlogit(df.to_pandas(), "X", ["Y"])
+##r = run_binlogit(df, "X", ["Y"])
+#r = run_ologit(df, "Y", ["X", "Z"])
+#print(r[0])
+#print("llf", r[1])
 
 #from pycit import itest
 
