@@ -11,7 +11,7 @@ from dgp import NodeCollection
 from .server import Server
 from .client import Client
 from .evaluation import get_symmetric_likelihood_tests, get_riod_tests, compare_tests_to_truth
-from .env import DEBUG
+from .env import DEBUG, EXPAND_ORDINALS, LOG_R
 
 import rpy2.rinterface_lib.callbacks as cb
 
@@ -81,7 +81,7 @@ def run_test_on_data(data,
         for col, dtype in sorted(data.schema.items(), key=lambda x: x[0]):
             print(f"{col} - {dtype}")
 
-    if not (DEBUG >= 2):
+    if LOG_R == 0:
         cb.consolewrite_print = lambda x: None
         cb.consolewrite_warnerror = lambda x: None
 
@@ -102,6 +102,7 @@ def run_test_on_data(data,
         'num_clients': num_clients,
         'num_samples': len(data),
         'max_regressors': max_regressors,
+        'expanded_ordinals': True if EXPAND_ORDINALS == 1 else False,
         'predicted_p_values': predicted_p_values,
         'true_p_values': true_p_values
     }

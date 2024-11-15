@@ -28,7 +28,7 @@ class Server():
             for feature, levels in client.get_ordinal_expressions().items():
                 self.ordinal_expressions[feature] = sorted(list(set(self.ordinal_expressions.get(feature, [])).union(set(levels))), key=lambda x: int(x.split('__ord__')[-1]))
 
-        for client in self.clients.values(): client.provide_categorical_expressions(self.category_expressions)
+        for client in self.clients.values(): client.provide_expressions(self.category_expressions, self.ordinal_expressions)
 
         self.test_engine: TestEngine = TestEngine(
             schema=self.schema,

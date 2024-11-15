@@ -13,7 +13,6 @@ plan("multicore", workers = n_cores, gc=TRUE)
 
 run_ci_test <- function(data, max_cond_set_cardinality, filedir, filename) {
   labels <- colnames(data)
-  print(labels)
   indepTest <- mixedCITest
   suffStat <- getMixedCISuffStat(dat = data,
                                  vars_names = labels,

@@ -36,7 +36,7 @@ class LikelihoodRatioTest():
 
         p_val = scipy.stats.chi2.sf(2*(t1_llf - t0_llf), t1_dof-t0_dof)
 
-        if DEBUG >= 1:
+        if DEBUG >= 2:
             print(f'*** Calculating p value for independence of {self.y_label} from {self.x_label} given {self.s_labels}')
             print(f'{t1_dof-t0_dof} DOFs = {t1_dof} T1 DOFs - {t0_dof} T0 DOFs')
             print(f'{2*(t1_llf - t0_llf):.4f} Test statistic = 2*({t1_llf:.4f} T1 LLF - {t0_llf:.4f} T0 LLF)')
@@ -80,7 +80,16 @@ class SymmetricLikelihoodRatioTest():
         self.v0, self.v1 = sorted([lrt0.y_label, lrt1.y_label])
         self.conditioning_set = sorted(lrt0.s_labels)
 
-        self.p_val = min(2*min(self.lrt0.p_val, self.lrt1.p_val), max(self.lrt0.p_val, self.lrt1.p_val))
+        if False:
+            self.p_val = min(self.lrt0.p_val, self.lrt1.p_val)
+        else:
+            self.p_val = min(2*min(self.lrt0.p_val, self.lrt1.p_val), max(self.lrt0.p_val, self.lrt1.p_val))
+        if DEBUG >= 2:
+            print(f'*** Combining p values for symmetry of tests between {self.v0} and {self.v1} given {self.conditioning_set}')
+            print(f'p value {self.lrt0.y_label}: {self.lrt0.p_val}')
+            print(f'p value {self.lrt1.y_label}: {self.lrt1.p_val}')
+            print(f'p value = {self.p_val:.4f}')
+
 
     def __repr__(self):
         return f"SymmetricLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val}\n\t- {self.lrt0}\n\t- {self.lrt1}"
@@ -209,7 +218,7 @@ def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_tru
     for test, gt_test in zip(sorted(tests), sorted(ground_truth_tests)):
         if test != gt_test:
             raise Exception('Mismatched tests in sorted zip. This should not happen when all tests are present.')
-        if DEBUG >= 3 or (DEBUG >= 1 and test.p_val != gt_test.p_val):
+        if DEBUG >= 2 or (DEBUG >= 1 and test.p_val != gt_test.p_val):
             print('***')
             print(f'Ground Truth:\n{gt_test}')
             print('---')

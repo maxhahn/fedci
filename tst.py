@@ -167,8 +167,8 @@ run_test_on_data(
     df,
     "test-data",
     1,
-    "",
-    ""
+    "experiments/dummy",
+    "test.ndjson"
 )
 
 import pandas as pd
@@ -190,11 +190,11 @@ def run_mnlogit(df, y_var, x_vars):
 
     return coef_df, results.llf
 
-print("On Intercept")
-r = run_mnlogit(df.to_pandas(), "X", [])
-print(r[0])
-print("llf", r[1])
-print("On Y,1")
-r = run_mnlogit(df.to_pandas(), "X", ["Y"])
-print(r[0])
-print("llf", r[1])
+#print("On Intercept")
+#r = run_mnlogit(df.to_pandas(), "X", [])
+#print(r[0])
+#print("llf", r[1])
+#print("On Y,1")
+#r = run_mnlogit(df.to_pandas(), "X", ["Y"])
+#print(r[0])
+#print("llf", r[1])

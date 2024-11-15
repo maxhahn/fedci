@@ -6,7 +6,7 @@ import numpy as np
 
 from typing import Dict, List
 
-from .env import DEBUG
+from .env import DEBUG, EXPAND_ORDINALS
 
 import statsmodels.api as sm
 from statsmodels.genmod.generalized_linear_model import GLMResults
@@ -148,13 +148,13 @@ class CategoricalComputationUnit(ComputationUnit):
             # LLF
             llf += np.sum(np.log(np.take(mus[category], np.nonzero(y)[0])))
             ## LLF SATURATED (for deviance)
-            llf_saturated += np.sum(y * np.log(np.clip(y, 1e-10, None)))
+            #llf_saturated += np.sum(y * np.log(np.clip(y, 1e-10, None)))
 
         # LLF
         llf += np.sum(np.log(np.take(1/denom, reference_category_indices.nonzero()[0])))
 
         ## LLF SATURATED (for deviance)
-        llf_saturated += np.sum(reference_category_indices * np.log(np.clip(reference_category_indices, 1e-10, None)))
+        #llf_saturated += np.sum(reference_category_indices * np.log(np.clip(reference_category_indices, 1e-10, None)))
         deviance = 2 * (llf_saturated - llf)
 
         return {
@@ -256,6 +256,7 @@ class Client():
                                                           for column, dtype in self.schema.items() if dtype == VariableType.ORDINAL}
 
         self.server_categorical_expressions: Dict[str, List[str]] = None
+        self.server_ordinal_expressions: Dict[str, List[str]] = None
         self.expanded_data: pl.DataFrame = None
 
     def get_data_schema(self):
@@ -266,15 +267,30 @@ class Client():
     def get_ordinal_expressions(self):
         return self.ordinal_expressions
 
-    def provide_categorical_expressions(self, expressions: Dict[str, List[str]]):
-        self.server_categorical_expressions = expressions
+    def provide_expressions(
+        self,
+        categorical_expressions: Dict[str, List[str]],
+        ordinal_expressions: Dict[str, List[str]]
+    ):
 
-        all_possible_categorical_expressions = set([li for l in expressions.values() for li in l])
-        #_data = self.data.to_dummies([pl.col(column) for column, dtype in self.schema.items()
-        #                              if dtype == VariableType.CATEGORICAL], separator='__cat__')
+        self.server_categorical_expressions = categorical_expressions
+        self.server_ordinal_expressions = ordinal_expressions
+
+        # expand categoricals
+        all_possible_categorical_expressions = set([li for l in categorical_expressions.values() for li in l])
         _data = self.data.to_dummies([column for column, dtype in self.schema.items() if dtype == VariableType.CATEGORICAL], separator='__cat__')
         missing_cols = list(all_possible_categorical_expressions - set(_data.columns))
         _data = _data.with_columns(*[pl.lit(0.0).alias(c) for c in missing_cols])
+
+        if EXPAND_ORDINALS == 1:
+            # expand ordinals
+            all_possible_ordinal_expressions = set([li for l in ordinal_expressions.values() for li in l])
+            _data = _data.to_dummies([column for column, dtype in self.schema.items() if dtype == VariableType.ORDINAL], separator='__cat__')
+            missing_cols = list(all_possible_ordinal_expressions - set(_data.columns))
+            _data = _data.with_columns(*[pl.lit(0.0).alias(c) for c in missing_cols])
+
+            # keep original ordinal variables
+            _data = _data.with_columns(self.data.select([column for column, dtype in self.schema.items() if dtype == VariableType.ORDINAL]))
 
         self.expanded_data = _data
 
