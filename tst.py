@@ -130,11 +130,10 @@ node_collections = [
     #nc911, nc912, nc913, nc914,
     #nc921, nc922, nc923, nc924,
     #nc931, nc932, nc933, nc934,
-    #nc941, nc942, nc943, nc944,
+    nc941, #nc942, nc943, nc944,
     #nc951, nc952,
-    nc953#, nc954,
+    #nc953#, nc954,
 ]
-#node_collections = [nc942]
 num_samples = [
     #100, 200, 300, 400,
     500, #600, 700, 800,
@@ -159,10 +158,10 @@ configurations *= num_runs
 #for i, configuration in enumerate(tqdm(configurations[:1], disable=True)):
 #    run_configured_test(configuration, 2)
 #for i in range(20):
-#    run_configured_test(configurations[0], 2)
-#run_configured_test(configurations[0], 2)
+#    run_configured_test(configurations[0], i)
+#run_configured_test(configurations[0], 15)
 import polars as pl
-df = pl.read_parquet("./error-data-01.parquet")
+df = pl.read_parquet("./error-data-02.parquet")
 run_test_on_data(
     df,
     "test-data",
@@ -173,7 +172,6 @@ run_test_on_data(
 
 import pandas as pd
 import statsmodels.api as sm
-
 def run_mnlogit(df, y_var, x_vars):
     # Prepare X matrix with constant
     X = sm.add_constant(df[x_vars])
@@ -190,11 +188,44 @@ def run_mnlogit(df, y_var, x_vars):
 
     return coef_df, results.llf
 
-#print("On Intercept")
+
+def run_binlogit(df, y_var, x_vars):
+
+    df = df.sort(x_vars, descending=True)
+    if len(x_vars) > 0:
+        df_x = df[x_vars].to_dummies(x_vars, separator='_ord_', drop_first=True).cast(pl.Int32).to_pandas()
+    else:
+        df_x = df.to_pandas()[x_vars]
+    df = df.to_pandas()
+    # Prepare X matrix with constant
+    X = sm.add_constant(df_x)
+
+    # Prepare y variable (assume binary 0/1)
+    y = df[y_var].astype(int)
+
+    # Fit the binary logistic regression model
+    model = sm.Logit(y, X)
+    results = model.fit()
+
+    # Get coefficients as DataFrame
+    coef_df = pd.DataFrame(results.params)
+
+    return coef_df, results.llf
+
+print("On Intercept")
 #r = run_mnlogit(df.to_pandas(), "X", [])
-#print(r[0])
-#print("llf", r[1])
-#print("On Y,1")
+r = run_binlogit(df, "X", [])
+print(r[0])
+print("llf", r[1])
+print("On Y,1")
 #r = run_mnlogit(df.to_pandas(), "X", ["Y"])
-#print(r[0])
-#print("llf", r[1])
+r = run_binlogit(df, "X", ["Y"])
+print(r[0])
+print("llf", r[1])
+
+#from pycit import itest
+
+#pval = itest(df["X"].to_numpy(), df["Y"].to_numpy(), test_args={'statistic': 'ksg_mi', 'n_jobs': 2})
+#print(f"Pycit pval A = {pval}")
+#pval = itest(df["Y"].to_numpy(), df["X"].to_numpy(), test_args={'statistic': 'ksg_mi', 'n_jobs': 2})
+#print(f"Pycit pval B = {pval}")

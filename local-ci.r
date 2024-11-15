@@ -17,12 +17,11 @@ run_ci_test <- function(data, max_cond_set_cardinality, filedir, filename) {
   suffStat <- getMixedCISuffStat(dat = data,
                                  vars_names = labels,
                                  covs_names = c())
-
   citestResults <- getAllCITestResults(data,
                                       indepTest,
                                       suffStat,
                                       m.max=max_cond_set_cardinality,
-                                      saveFiles=TRUE,
+                                      saveFiles=FALSE,
                                       fileid=filename,
                                       citestResults_folder=filedir)
   result <- list(citestResults=citestResults, labels=labels)

@@ -80,10 +80,7 @@ class SymmetricLikelihoodRatioTest():
         self.v0, self.v1 = sorted([lrt0.y_label, lrt1.y_label])
         self.conditioning_set = sorted(lrt0.s_labels)
 
-        if False:
-            self.p_val = min(self.lrt0.p_val, self.lrt1.p_val)
-        else:
-            self.p_val = min(2*min(self.lrt0.p_val, self.lrt1.p_val), max(self.lrt0.p_val, self.lrt1.p_val))
+        self.p_val = min(2*min(self.lrt0.p_val, self.lrt1.p_val), max(self.lrt0.p_val, self.lrt1.p_val))
         if DEBUG >= 2:
             print(f'*** Combining p values for symmetry of tests between {self.v0} and {self.v1} given {self.conditioning_set}')
             print(f'p value {self.lrt0.y_label}: {self.lrt0.p_val}')

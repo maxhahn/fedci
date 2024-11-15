@@ -156,7 +156,7 @@ class TestEngine():
                 if EXPAND_ORDINALS:
                     for _var, expressions in ordinal_expressions.items():
                         if _var in variable_set:
-                            variable_set = (set(variable_set) - {_var}) | set(sorted(list(expressions)[:-1])) # drop first cat
+                            variable_set = (set(variable_set) - {_var}) | set(sorted(list(expressions)[1:])) # drop first cat
                 expanded_powerset_of_regressors.append(variable_set)
             powerset_of_regressors = expanded_powerset_of_regressors
 

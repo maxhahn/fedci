@@ -50,8 +50,8 @@ class ComputationHelper():
         return cls.run_model(y, X, model)
 
 class ComputationUnit():
-    @classmethod
-    def compute(cls, data, y_label, X_labels, beta):
+    @staticmethod
+    def compute(data, y_label, X_labels, beta):
         raise NotImplementedError()
 
 class ContinousComputationUnit(ComputationUnit):
@@ -285,7 +285,7 @@ class Client():
         if EXPAND_ORDINALS == 1:
             # expand ordinals
             all_possible_ordinal_expressions = set([li for l in ordinal_expressions.values() for li in l])
-            _data = _data.to_dummies([column for column, dtype in self.schema.items() if dtype == VariableType.ORDINAL], separator='__cat__')
+            _data = _data.to_dummies([column for column, dtype in self.schema.items() if dtype == VariableType.ORDINAL], separator='__ord__')
             missing_cols = list(all_possible_ordinal_expressions - set(_data.columns))
             _data = _data.with_columns(*[pl.lit(0.0).alias(c) for c in missing_cols])
 
