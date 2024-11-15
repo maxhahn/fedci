@@ -1,5 +1,6 @@
 
 from .testing import Test
+from .env import DEBUG
 
 import scipy
 import polars as pl
@@ -207,12 +208,10 @@ def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_tru
     for test, gt_test in zip(sorted(tests), sorted(ground_truth_tests)):
         if test != gt_test:
             raise Exception('Mismatched tests in sorted zip. This should not happen when all tests are present.')
-        from .env import DEBUG
         if DEBUG >= 3 or (DEBUG >= 1 and test.p_val != gt_test.p_val):
             print('***')
             print(f'Ground Truth:\n{gt_test}')
             print('---')
-            print(f'{test.lrt0}')
-            print(f'{test.lrt1}')
+            print(f'Prediction:\n{test}')
         p_values.append((test.p_val, gt_test.p_val))
     return [p_vals[0] for p_vals in p_values], [p_vals[1] for p_vals in p_values]

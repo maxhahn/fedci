@@ -154,8 +154,9 @@ configurations = [c + file_info for c in configurations]
 num_runs = 1
 
 configurations *= num_runs
-
 # Run tests
 #process_map(run_configured_test, configurations, max_workers=5, chunksize=10)
-for i, configuration in enumerate(tqdm(configurations[:1], disable=True)):
-    run_configured_test(configuration, i)
+#for i, configuration in enumerate(tqdm(configurations[:1], disable=True)):
+#    run_configured_test(configuration, 2)
+for i in range(20):
+    run_configured_test(configurations[0], i)
