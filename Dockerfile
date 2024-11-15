@@ -33,7 +33,7 @@ RUN R -e "BiocManager::install(c('graph', 'RBGL', 'Rgraphviz'))"
 RUN install2.r -e rje pcalg jsonlite lavaan doFuture gtools
 
 # install FCI Utils
-RUN R CMD INSTALL imports/FCI.Utils_1.1.tar.gz
+RUN R CMD INSTALL imports/FCI.Utils_1.0.tar.gz
 
 # build and install rIOD package
 RUN R CMD build .
