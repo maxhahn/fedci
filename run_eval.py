@@ -7,7 +7,7 @@ import glob
 
 # %%
 # Load data
-path =  './experiments/expanded_ordinals/2*ndjson'
+path =  './experiments/t2/*ndjson'
 try:
     df = pl.read_ndjson(path, ignore_errors=True)
 except:
@@ -53,9 +53,20 @@ hvplot.save(plot, 'images/p_value_scatter.html')
 
 # Plot correlation of p values
 _df = df
+df_correlation_fix = _df.with_columns(correct=pl.col('predicted_p_values') == pl.col('true_p_values'))
+df_correlation_fix = df_correlation_fix.group_by('name', 'num_clients', 'num_samples').agg(all_corrects=pl.min('correct'))
+df_correlation_fix = df_correlation_fix.filter(pl.col('all_corrects')).drop('all_corrects')
+df_correlation_fix = df_correlation_fix.with_columns(correlation_fix=pl.lit(1.0))
+
 _df = _df.group_by('name', 'experiment_type', 'conditioning_type', 'num_clients', 'num_samples') \
     .agg(pl.corr('predicted_p_values', 'true_p_values')) \
     .rename({'predicted_p_values': 'p_value_correlation'})
+
+_df = _df.join(df_correlation_fix, on=['name', 'num_clients', 'num_samples'], how='left')
+_df = _df.with_columns(pl.col('p_value_correlation').replace_strict({float('NaN'): None}, default=pl.col('p_value_correlation')))
+_df = _df.with_columns(pl.coalesce(['p_value_correlation', 'correlation_fix'])).drop('correlation_fix')
+
+assert _df['p_value_correlation'].null_count() == 0, 'NaN in correlations'
 
 plot = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   y='p_value_correlation',
