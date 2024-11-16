@@ -18,7 +18,6 @@ import numpy as np
 import pickle
 import base64
 
-
 import sys
 import os
 # Add the parent directory to sys.path
@@ -49,29 +48,29 @@ def serialize_numpy_array(arr):
         'data': arr_base64
     }
     return json.dumps(data)
-    
+
 
 
 #import fedci as fedci
 
 
-# ,------.          ,--.  ,--.  ,--.  ,--.               
-# |  .---',--,--, ,-'  '-.`--',-'  '-.`--' ,---.  ,---.  
-# |  `--, |      \'-.  .-',--.'-.  .-',--.| .-. :(  .-'  
-# |  `---.|  ||  |  |  |  |  |  |  |  |  |\   --..-'  `) 
-# `------'`--''--'  `--'  `--'  `--'  `--' `----'`----'  
+# ,------.          ,--.  ,--.  ,--.  ,--.
+# |  .---',--,--, ,-'  '-.`--',-'  '-.`--' ,---.  ,---.
+# |  `--, |      \'-.  .-',--.'-.  .-',--.| .-. :(  .-'
+# |  `---.|  ||  |  |  |  |  |  |  |  |  |\   --..-'  `)
+# `------'`--''--'  `--'  `--'  `--'  `--' `----'`----'
 
 
 class Algorithm(str, Enum):
     P_VALUE_AGGREGATION = 'IOD'
     FEDERATED_GLM = 'FEDGLM'
-    
+
 class AlgorithmState(str, Enum):
     RUNNING = 'RUNNING'
     FIX_CATEGORICALS = 'FIX_CATEGORICALS'
     FIX_ORDINALS = 'FIX_ORDINALS'
     FINISHED = 'FINISHED'
-    
+
 @dataclass
 class Connection:
     id: str
@@ -82,7 +81,7 @@ class Connection:
     categorical_expressions: Dict[str, List[str]]
     ordinal_expressions: Dict[str, List[str]]
     data: Optional[pd.DataFrame]=None
-    
+
 @dataclass
 class FederatedGLMData:
     xwx: np.typing.NDArray
@@ -91,7 +90,7 @@ class FederatedGLMData:
     llf: float
     rss: float
     nobs: int
-    
+
     def __init__(self, fedglm_data_dto):
         self.xwx = deserialize_numpy_array(fedglm_data_dto.xwx)
         self.xwz = deserialize_numpy_array(fedglm_data_dto.xwz)
@@ -99,7 +98,7 @@ class FederatedGLMData:
         self.llf = fedglm_data_dto.llf
         self.rss = fedglm_data_dto.rss
         self.nobs = fedglm_data_dto.nobs
-    
+
 @dataclass
 class FederatedGLMDataDTO:
     xwx: object
@@ -108,28 +107,28 @@ class FederatedGLMDataDTO:
     llf: float
     rss: float
     nobs: int
-    
+
 @dataclass
 class NPArray:
     shape: Tuple[int]
     dtype: str
     data: str
-    
+
 @dataclass
 class FederatedGLMTesting:
     testing_engine: fedci.TestingEngine
     pending_data: Dict[str, FederatedGLMData]
     start_of_last_iteration: datetime.datetime
-    
+
 @dataclass
 class FederatedGLMFixupTesting(FederatedGLMTesting):
     fixup_engine: object
-    
+
     def __init__(self, testing_engine: fedci.TestingEngine, room, variable_type):
         self.testing_engine = testing_engine
-        
+
         ce, rce, oe, roe = get_categorical_and_ordinal_expressions_with_reverse(room)
-        
+
         if variable_type == 'categorical':
             self.fixup_engine = fedci.FixupCategoricalsEngine(testing_engine,
                                                               room.user_provided_labels,
@@ -149,13 +148,13 @@ class FederatedGLMFixupTesting(FederatedGLMTesting):
                                                           )
         else:
             assert False, f'Unknown variable type: {variable_type}'
-            
+
         if self.fixup_engine.get_current_test() is None:
             raise Exception('Should not be called, when there are no tests to fix')
         self.pending_data = self.fixup_engine.get_current_test()[1]
         self.start_of_last_iteration = datetime.datetime.now()
-        
-    
+
+
 @dataclass
 class Room:
     name: str
@@ -176,14 +175,14 @@ class Room:
     user_results: Dict[str, List[List[int]]]
     user_labels: Dict[str, List[str]]
     federated_glm: FederatedGLMTesting
-    
-    
-# ,------. ,--------. ,-----.         
-# |  .-.  \'--.  .--''  .-.  ' ,---.  
-# |  |  \  :  |  |   |  | |  |(  .-'  
-# |  '--'  /  |  |   '  '-'  '.-'  `) 
-# `-------'   `--'    `-----' `----'  
-    
+
+
+# ,------. ,--------. ,-----.
+# |  .-.  \'--.  .--''  .-.  ' ,---.
+# |  |  \  :  |  |   |  | |  |(  .-'
+# |  '--'  /  |  |   '  '-'  '.-'  `)
+# `-------'   `--'    `-----' `----'
+
 @dataclass
 class UserDTO:
     id: str
@@ -206,7 +205,7 @@ class FederatedGLMStatus:
     current_iteration: int
     current_relative_change_in_deviance: float
     start_of_last_iteration: datetime.datetime
-    
+
     def __init__(self, glm_testing_state: FederatedGLMTesting, requesting_user: str):
         testing_round: fedci.TestingRound = glm_testing_state.testing_engine.testing_rounds[0] # todo: might cause errors
         self.y_label = testing_round.y_label
@@ -216,31 +215,31 @@ class FederatedGLMStatus:
         self.current_iteration = testing_round.iterations
         self.current_relative_change_in_deviance = testing_round.get_relative_change_in_deviance()
         self.start_of_last_iteration = glm_testing_state.start_of_last_iteration
-        
+
 @dataclass
 class FederatedGLMFixupStatus(FederatedGLMStatus):
     y_label_compare: Optional[str]
     current_beta_compare: Optional[object]
-    
+
     def __init__(self, glm_testing_state: FederatedGLMFixupTesting, requesting_user: str):
         fixup_round = glm_testing_state.fixup_engine.get_current_test()
-        
+
         if fixup_round is None:
             raise Exception('Dont call this when engine is done')
-        
+
         _, _, (X_labels, y_label0, y_label1, beta0, beta1) = fixup_round
 
         self.y_label = y_label0
         self.current_beta = serialize_numpy_array(beta0)
-        
+
         self.y_label_compare = y_label1
         self.current_beta_compare = serialize_numpy_array(beta1) if beta1 is not None else None
-        
+
         self.X_labels = X_labels
-        
+
         self.is_awaiting_response = requesting_user is not None and requesting_user in glm_testing_state.pending_data and glm_testing_state.pending_data.get(requesting_user) is None
         self.start_of_last_iteration = glm_testing_state.start_of_last_iteration
-        
+
 @dataclass
 class RoomDTO:
     name: str
@@ -255,8 +254,8 @@ class RoomDTO:
         self.algorithm_state = room.algorithm_state
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
-        self.is_protected = room.password is not None    
-        
+        self.is_protected = room.password is not None
+
 @dataclass
 class RoomDetailsDTO:
     name: str
@@ -277,7 +276,7 @@ class RoomDetailsDTO:
     private_result: List[List[int]]
     private_labels: List[str]
     federated_glm_status: FederatedGLMStatus
-    
+
     def __init__(self, room: Room, requesting_user: str=None):
         self.name = room.name
         self.algorithm = room.algorithm
@@ -290,7 +289,7 @@ class RoomDetailsDTO:
         self.is_protected = room.password is not None
         self.users = sorted(list(room.users))
         self.user_provided_labels = room.user_provided_labels
-        
+
         # TODO: prevent repeated calculation of this
         categorical_expressions = {}
         for expressions in room.user_provided_categorical_expressions.values():
@@ -300,10 +299,10 @@ class RoomDetailsDTO:
         for expressions in room.user_provided_ordinal_expressions.values():
             for k,v in expressions.items():
                 ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))), key=lambda x: int(x.split('__ord__')[-1]))
-                
+
         self.user_provided_categorical_expressions = categorical_expressions
         self.user_provided_ordinal_expressions = ordinal_expressions
-        
+
         self.result = room.result
         self.result_labels = room.result_labels
         self.private_result = room.user_results[requesting_user] if room.user_results is not None and requesting_user in room.user_results else None
@@ -314,13 +313,13 @@ class RoomDetailsDTO:
             self.federated_glm_status = FederatedGLMStatus(room.federated_glm, requesting_user)
         else:
             self.federated_glm_status = FederatedGLMFixupStatus(room.federated_glm, requesting_user)
-        
-# ,------.                                      ,--.          
-# |  .--. ' ,---.  ,---. ,--.,--. ,---.  ,---.,-'  '-. ,---.  
-# |  '--'.'| .-. :| .-. ||  ||  || .-. :(  .-''-.  .-'(  .-'  
-# |  |\  \ \   --.' '-' |'  ''  '\   --..-'  `) |  |  .-'  `) 
-# `--' '--' `----' `-|  | `----'  `----'`----'  `--'  `----'  
-#                    `--' 
+
+# ,------.                                      ,--.
+# |  .--. ' ,---.  ,---. ,--.,--. ,---.  ,---.,-'  '-. ,---.
+# |  '--'.'| .-. :| .-. ||  ||  || .-. :(  .-''-.  .-'(  .-'
+# |  |\  \ \   --.' '-' |'  ''  '\   --..-'  `) |  |  .-'  `)
+# `--' '--' `----' `-|  | `----'  `----'`----'  `--'  `----'
+#                    `--'
 
 @dataclass
 class CheckInRequest:
@@ -329,52 +328,52 @@ class CheckInRequest:
     data_labels: List[str]
     categorical_expressions: Dict[str, List[str]]
     ordinal_expressions: Dict[str, List[str]]
-        
+
 @dataclass
 class BasicRequest:
     id: str
     username: str
-    
+
 @dataclass
 class UpdateUserRequest(BasicRequest):
     algorithm: str
     new_username: str
-    
+
 @dataclass
 class RoomCreationRequest(BasicRequest):
     room_name: str
     algorithm: str
     password: str | None
-    
+
 @dataclass
 class JoinRoomRequest(BasicRequest):
     password: str | None
-    
+
 @dataclass
 class DataSubmissionRequest(BasicRequest):
     data: str
-    
+
 @dataclass
 class IODExecutionRequest(BasicRequest):
     alpha: float
-    
-    
+
+
 @dataclass
 class BaseFedGLMRequest(BasicRequest):
     current_beta: object
     current_iteration: int
     data: FederatedGLMDataDTO
-    
+
 @dataclass
 class FixupFedGLMRequest(BasicRequest):
     llf: float
-    
 
-# ,------.            ,--.               ,---.   ,--.                         ,--.                                
-# |  .-.  \  ,--,--.,-'  '-. ,--,--.    '   .-',-'  '-.,--.--.,--.,--. ,---.,-'  '-.,--.,--.,--.--. ,---.  ,---.  
-# |  |  \  :' ,-.  |'-.  .-'' ,-.  |    `.  `-.'-.  .-'|  .--'|  ||  || .--''-.  .-'|  ||  ||  .--'| .-. :(  .-'  
-# |  '--'  /\ '-'  |  |  |  \ '-'  |    .-'    | |  |  |  |   '  ''  '\ `--.  |  |  '  ''  '|  |   \   --..-'  `) 
-# `-------'  `--`--'  `--'   `--`--'    `-----'  `--'  `--'    `----'  `---'  `--'   `----' `--'    `----'`----' 
+
+# ,------.            ,--.               ,---.   ,--.                         ,--.
+# |  .-.  \  ,--,--.,-'  '-. ,--,--.    '   .-',-'  '-.,--.--.,--.,--. ,---.,-'  '-.,--.,--.,--.--. ,---.  ,---.
+# |  |  \  :' ,-.  |'-.  .-'' ,-.  |    `.  `-.'-.  .-'|  .--'|  ||  || .--''-.  .-'|  ||  ||  .--'| .-. :(  .-'
+# |  '--'  /\ '-'  |  |  |  \ '-'  |    .-'    | |  |  |  |   '  ''  '\ `--.  |  |  '  ''  '|  |   \   --..-'  `)
+# `-------'  `--`--'  `--'   `--`--'    `-----'  `--'  `--'    `----'  `---'  `--'   `----' `--'    `----'`----'
 
 rooms: Dict[str, Room] = {}
 connections: Dict[str, Connection] = {}
@@ -382,23 +381,23 @@ user2room: Dict[str, Room] = {}
 user2connection: Dict[str, Connection] = {}
 last_cleanse_time = datetime.datetime.now()
 
-# ,--.  ,--.       ,--.                             
-# |  '--'  | ,---. |  | ,---.  ,---. ,--.--. ,---.  
-# |  .--.  || .-. :|  || .-. || .-. :|  .--'(  .-'  
-# |  |  |  |\   --.|  || '-' '\   --.|  |   .-'  `) 
-# `--'  `--' `----'`--'|  |-'  `----'`--'   `----'  
-#                      `--'                         
+# ,--.  ,--.       ,--.
+# |  '--'  | ,---. |  | ,---.  ,---. ,--.--. ,---.
+# |  .--.  || .-. :|  || .-. || .-. :|  .--'(  .-'
+# |  |  |  |\   --.|  || '-' '\   --.|  |   .-'  `)
+# `--'  `--' `----'`--'|  |-'  `----'`--'   `----'
+#                      `--'
 
 def validate_user_request(id: str, username: str):
     if id not in connections:
         return False
-    
+
     if connections[id].username != username:
         return False
-    
+
     connections[id].last_request_time = datetime.datetime.now()
     return True
-    
+
 def cleanse_inactive_users(curr_time):
     for id, conn in connections.items():
         if (curr_time-conn.last_request_time).total_seconds() > 60*60*3:
@@ -414,12 +413,12 @@ def cleanse_inactive_users(curr_time):
             # remove connection lookup and connection
             del user2connection[username]
             del conn[id]
-            
-# ,--.  ,--.               ,--.  ,--.  ,--.          ,-----.,--.                  ,--.     
-# |  '--'  | ,---.  ,--,--.|  |,-'  '-.|  ,---.     '  .--./|  ,---.  ,---.  ,---.|  |,-.  
-# |  .--.  || .-. :' ,-.  ||  |'-.  .-'|  .-.  |    |  |    |  .-.  || .-. :| .--'|     /  
-# |  |  |  |\   --.\ '-'  ||  |  |  |  |  | |  |    '  '--'\|  | |  |\   --.\ `--.|  \  \  
-# `--'  `--' `----' `--`--'`--'  `--'  `--' `--'     `-----'`--' `--' `----' `---'`--'`--' 
+
+# ,--.  ,--.               ,--.  ,--.  ,--.          ,-----.,--.                  ,--.
+# |  '--'  | ,---.  ,--,--.|  |,-'  '-.|  ,---.     '  .--./|  ,---.  ,---.  ,---.|  |,-.
+# |  .--.  || .-. :' ,-.  ||  |'-.  .-'|  .-.  |    |  |    |  .-.  || .-. :| .--'|     /
+# |  |  |  |\   --.\ '-'  ||  |  |  |  |  | |  |    '  '--'\|  | |  |\   --.\ `--.|  \  \
+# `--'  `--' `----' `--`--'`--'  `--'  `--' `--'     `-----'`--' `--' `----' `---'`--'`--'
 
 @get("/health-check")
 async def health_check() -> Response:
@@ -428,42 +427,42 @@ async def health_check() -> Response:
     if (curr_time - last_cleanse_time).total_seconds() > 60*20:
         cleanse_inactive_users(curr_time)
         last_cleanse_time = curr_time
-    
+
     return Response(
         media_type=MediaType.TEXT,
         content='Hello there!',
         status_code=200
     )
-    
-#                                                                                                         ,--.                                                 
-#  ,-----.,--.,--.                 ,--.       ,-----.,--.                  ,--.          ,--.            /  /,------.                                          
-# '  .--./|  |`--' ,---. ,--,--, ,-'  '-.    '  .--./|  ,---.  ,---.  ,---.|  |,-.,-----.|  |,--,--,    /  / |  .--. ' ,---. ,--,--,  ,--,--.,--,--,--. ,---.  
-# |  |    |  |,--.| .-. :|      \'-.  .-'    |  |    |  .-.  || .-. :| .--'|     /'-----'|  ||      \  /  /  |  '--'.'| .-. :|      \' ,-.  ||        || .-. : 
-# '  '--'\|  ||  |\   --.|  ||  |  |  |      '  '--'\|  | |  |\   --.\ `--.|  \  \       |  ||  ||  | /  /   |  |\  \ \   --.|  ||  |\ '-'  ||  |  |  |\   --. 
-#  `-----'`--'`--' `----'`--''--'  `--'       `-----'`--' `--' `----' `---'`--'`--'      `--'`--''--'/  /    `--' '--' `----'`--''--' `--`--'`--`--`--' `----' 
+
+#                                                                                                         ,--.
+#  ,-----.,--.,--.                 ,--.       ,-----.,--.                  ,--.          ,--.            /  /,------.
+# '  .--./|  |`--' ,---. ,--,--, ,-'  '-.    '  .--./|  ,---.  ,---.  ,---.|  |,-.,-----.|  |,--,--,    /  / |  .--. ' ,---. ,--,--,  ,--,--.,--,--,--. ,---.
+# |  |    |  |,--.| .-. :|      \'-.  .-'    |  |    |  .-.  || .-. :| .--'|     /'-----'|  ||      \  /  /  |  '--'.'| .-. :|      \' ,-.  ||        || .-. :
+# '  '--'\|  ||  |\   --.|  ||  |  |  |      '  '--'\|  | |  |\   --.\ `--.|  \  \       |  ||  ||  | /  /   |  |\  \ \   --.|  ||  |\ '-'  ||  |  |  |\   --.
+#  `-----'`--'`--' `----'`--''--'  `--'       `-----'`--' `--' `----' `---'`--'`--'      `--'`--''--'/  /    `--' '--' `----'`--''--' `--`--'`--`--`--' `----'
 #                                                                                                   `--'
 
 @post("/check-in")
 async def check_in(data: CheckInRequest) -> Response:
-    
+
     if data.username is None or len(data.username.replace(r'\s', '')) == 0:
         raise HTTPException(detail='Username is not accepted', status_code=400)
-    
+
     # guarantee unused new id
     new_id = uuid.uuid4()
     while new_id in connections:
         new_id = uuid.uuid4()
     new_id = str(new_id)
-        
+
     username = data.username
-        
+
     username_offset = 1
     occupied_usernames = [c.username for c in connections.values()]
     new_username = username
     while new_username in occupied_usernames:
         new_username = username + f' ({username_offset})'
         username_offset += 1
-        
+
     conn = Connection(new_id,
                       new_username,
                       datetime.datetime.now(),
@@ -480,15 +479,15 @@ async def check_in(data: CheckInRequest) -> Response:
         content=UserDTO(conn),
         status_code=200
         )
-    
+
 @post("/update-user")
 async def update_user(data: UpdateUserRequest) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
-    
+
     #if data.username is None or len(data.username.replace(r'\s', '')) == 0:
     #    raise HTTPException(detail='Username is not accepted', status_code=400)
-    
+
     if data.new_username is not None and len(data.new_username.replace(r'\s', '')) > 0:
         username_offset = 1
         occupied_usernames = [c.username for c in connections.values()]
@@ -496,9 +495,9 @@ async def update_user(data: UpdateUserRequest) -> Response:
         while new_username in occupied_usernames:
             new_username = data.new_username + f' ({username_offset})'
             username_offset += 1
-            
+
         connections[data.id].username = new_username
-        
+
     connections[data.id].algorithm = Algorithm(data.algorithm)
     conn = connections[data.id]
 
@@ -507,14 +506,14 @@ async def update_user(data: UpdateUserRequest) -> Response:
         content=UserDTO(conn),
         status_code=200
         )
-    
-#                                                                          ,--.                                                                                     
-#  ,----.            ,--.      ,------.                                   /  /,------.                             ,------.           ,--.          ,--.,--.        
-# '  .-./    ,---. ,-'  '-.    |  .--. ' ,---.  ,---. ,--,--,--. ,---.   /  / |  .--. ' ,---.  ,---. ,--,--,--.    |  .-.  \  ,---. ,-'  '-. ,--,--.`--'|  | ,---.  
-# |  | .---.| .-. :'-.  .-'    |  '--'.'| .-. || .-. ||        |(  .-'  /  /  |  '--'.'| .-. || .-. ||        |    |  |  \  :| .-. :'-.  .-'' ,-.  |,--.|  |(  .-'  
-# '  '--'  |\   --.  |  |      |  |\  \ ' '-' '' '-' '|  |  |  |.-'  `)/  /   |  |\  \ ' '-' '' '-' '|  |  |  |    |  '--'  /\   --.  |  |  \ '-'  ||  ||  |.-'  `) 
-#  `------'  `----'  `--'      `--' '--' `---'  `---' `--`--`--'`----'/  /    `--' '--' `---'  `---' `--`--`--'    `-------'  `----'  `--'   `--`--'`--'`--'`----'  
-#                                                                    `--'  
+
+#                                                                          ,--.
+#  ,----.            ,--.      ,------.                                   /  /,------.                             ,------.           ,--.          ,--.,--.
+# '  .-./    ,---. ,-'  '-.    |  .--. ' ,---.  ,---. ,--,--,--. ,---.   /  / |  .--. ' ,---.  ,---. ,--,--,--.    |  .-.  \  ,---. ,-'  '-. ,--,--.`--'|  | ,---.
+# |  | .---.| .-. :'-.  .-'    |  '--'.'| .-. || .-. ||        |(  .-'  /  /  |  '--'.'| .-. || .-. ||        |    |  |  \  :| .-. :'-.  .-'' ,-.  |,--.|  |(  .-'
+# '  '--'  |\   --.  |  |      |  |\  \ ' '-' '' '-' '|  |  |  |.-'  `)/  /   |  |\  \ ' '-' '' '-' '|  |  |  |    |  '--'  /\   --.  |  |  \ '-'  ||  ||  |.-'  `)
+#  `------'  `----'  `--'      `--' '--' `---'  `---' `--`--`--'`----'/  /    `--' '--' `---'  `---' `--`--`--'    `-------'  `----'  `--'   `--`--'`--'`--'`----'
+#                                                                    `--'
 
 # list rooms
 @post("/rooms")
@@ -527,7 +526,7 @@ async def get_rooms(data: BasicRequest) -> Response:
         content=[RoomDTO(room) for room in rooms.values() if not room.is_hidden],
         status_code=200
         )
-    
+
 # get room info
 @post("/rooms/{room_name:str}")
 async def get_room(data: BasicRequest, room_name: str) -> Response:
@@ -535,9 +534,9 @@ async def get_room(data: BasicRequest, room_name: str) -> Response:
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
-    
+
     room = rooms[room_name]
-    
+
     if data.username not in room.users:
         raise HTTPException(detail='You are not in this room', status_code=403)
 
@@ -546,13 +545,13 @@ async def get_room(data: BasicRequest, room_name: str) -> Response:
         content=RoomDetailsDTO(room, data.username),
         status_code=200
         )
-    
-# ,------.                             ,--.          ,--.                                ,--.  ,--.                
-# |  .--. ' ,---.  ,---. ,--,--,--.    |  |,--,--, ,-'  '-. ,---. ,--.--. ,--,--. ,---.,-'  '-.`--' ,---. ,--,--,  
-# |  '--'.'| .-. || .-. ||        |    |  ||      \'-.  .-'| .-. :|  .--'' ,-.  || .--''-.  .-',--.| .-. ||      \ 
-# |  |\  \ ' '-' '' '-' '|  |  |  |    |  ||  ||  |  |  |  \   --.|  |   \ '-'  |\ `--.  |  |  |  |' '-' '|  ||  | 
-# `--' '--' `---'  `---' `--`--`--'    `--'`--''--'  `--'   `----'`--'    `--`--' `---'  `--'  `--' `---' `--''--' 
-    
+
+# ,------.                             ,--.          ,--.                                ,--.  ,--.
+# |  .--. ' ,---.  ,---. ,--,--,--.    |  |,--,--, ,-'  '-. ,---. ,--.--. ,--,--. ,---.,-'  '-.`--' ,---. ,--,--,
+# |  '--'.'| .-. || .-. ||        |    |  ||      \'-.  .-'| .-. :|  .--'' ,-.  || .--''-.  .-',--.| .-. ||      \
+# |  |\  \ ' '-' '' '-' '|  |  |  |    |  ||  ||  |  |  |  \   --.|  |   \ '-'  |\ `--.  |  |  |  |' '-' '|  ||  |
+# `--' '--' `---'  `---' `--`--`--'    `--'`--''--'  `--'   `----'`--'    `--`--' `---'  `--'  `--' `---' `--''--'
+
 # create room
 @post("/rooms/create")
 async def create_room(data: RoomCreationRequest) -> Response:
@@ -560,17 +559,17 @@ async def create_room(data: RoomCreationRequest) -> Response:
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if len(data.room_name) == 0:
         raise HTTPException(detail='The room must have a name with at least 1 character', status_code=400)
-    
+
     room_owner = data.username
     room_name = data.room_name
-    
+
     room_name_offset = 1
     new_room_name = room_name
     occupied_room_names = [r.name for r in rooms.values()]
     while new_room_name in occupied_room_names:
         new_room_name = room_name + f' ({room_name_offset})'
         room_name_offset += 1
-    
+
     room = Room(name=new_room_name,
                 algorithm=Algorithm(data.algorithm),
                 algorithm_state=AlgorithmState.RUNNING,
@@ -590,10 +589,10 @@ async def create_room(data: RoomCreationRequest) -> Response:
                 user_labels={},
                 federated_glm=None
                 )
-    
+
     rooms[new_room_name] = room
     user2room[room_owner] = room
-    
+
     return Response(
         media_type=MediaType.JSON,
         content=RoomDetailsDTO(room, data.username),
@@ -609,13 +608,13 @@ async def join_room(data: JoinRoomRequest, room_name: str) -> Response:
         raise HTTPException(detail='You are already assigned a room', status_code=403)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
-    
+
     room = rooms[room_name]
-    
+
     if room.algorithm == Algorithm.P_VALUE_AGGREGATION and connections[data.id].data is None:
         raise HTTPException(detail='You have to upload data before joining a room', status_code=403)
 
-    
+
     if room.is_locked:
         raise HTTPException(detail='The room is locked', status_code=403)
     if room.password != data.password:
@@ -626,13 +625,13 @@ async def join_room(data: JoinRoomRequest, room_name: str) -> Response:
     room.user_provided_ordinal_expressions[data.username] = connections[data.id].ordinal_expressions
     room.user_provided_labels[data.username] = connections[data.id].data_labels
     user2room[data.username] = room
-    
+
     return Response(
         media_type=MediaType.JSON,
         content=RoomDetailsDTO(room, data.username),
         status_code=200
         )
-    
+
 # leave room
 @post("/rooms/{room_name:str}/leave")
 async def leave_room(data: BasicRequest, room_name: str) -> Response:
@@ -640,12 +639,12 @@ async def leave_room(data: BasicRequest, room_name: str) -> Response:
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
-    
+
     room = rooms[room_name]
-    
+
     if data.username not in room.users:
         raise HTTPException(detail='You are not in the room', status_code=403)
-    
+
     room.users.remove(data.username)
     del user2room[data.username]
     # just remove room if it is empty
@@ -656,24 +655,24 @@ async def leave_room(data: BasicRequest, room_name: str) -> Response:
             content="You left the room",
             status_code=200
             )
-    
+
     del room.user_provided_labels[data.username]
     del room.user_provided_categorical_expressions[data.username]
     del room.user_provided_ordinal_expressions[data.username]
     if room.is_finished:
         del room.user_results[data.username]
-        
+
     if data.username == room.owner_name:
         room.owner_name = room.users[0]
-        
+
     rooms[room_name] = room # reassign
-    
+
     return Response(
         media_type=MediaType.TEXT,
         content="You left the room",
         status_code=200
         )
-    
+
 # kick user from room
 @post("/rooms/{room_name:str}/kick/{username_to_kick:str}")
 async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_kick: str) -> Response:
@@ -681,7 +680,7 @@ async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_ki
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
-    
+
     room = rooms[room_name]
     if room.is_finished:
         raise HTTPException(detail='Cannot kick users once IOD was executed', status_code=403)
@@ -692,10 +691,10 @@ async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_ki
         raise HTTPException(detail='You do not have sufficient authority in this room', status_code=403)
     if room.owner_name == username_to_kick:
         raise HTTPException(detail='Cannot kick the owner of the room', status_code=403)
-    
+
     if username_to_kick not in room.users:
         raise HTTPException(detail='The person attempted to kick is not inside the room', status_code=403)
-    
+
     room.users.remove(username_to_kick)
     del room.user_provided_labels[username_to_kick]
     del room.user_provided_categorical_expressions[username_to_kick]
@@ -704,130 +703,130 @@ async def kick_user_from_room(data: BasicRequest, room_name: str, username_to_ki
         del room.user_results[username_to_kick]
     del user2room[username_to_kick]
     rooms[room_name] = room
-    
+
     return Response(
         media_type=MediaType.JSON,
         content=RoomDetailsDTO(room, data.username),
         status_code=200
         )
-    
-    
-#   ,-.,--. ,--.        ,-.  ,--.                ,--.        ,------.                          
-#  / .'|  | |  |,--,--, '. \ |  |    ,---.  ,---.|  |,-.     |  .--. ' ,---.  ,---. ,--,--,--. 
-# |  | |  | |  ||      \ |  ||  |   | .-. || .--'|     /     |  '--'.'| .-. || .-. ||        | 
-# |  | '  '-'  '|  ||  | |  ||  '--.' '-' '\ `--.|  \  \     |  |\  \ ' '-' '' '-' '|  |  |  | 
-#  \ '. `-----' `--''--'.' / `-----' `---'  `---'`--'`--'    `--' '--' `---'  `---' `--`--`--' 
-#   `-'                 `-'    
-    
+
+
+#   ,-.,--. ,--.        ,-.  ,--.                ,--.        ,------.
+#  / .'|  | |  |,--,--, '. \ |  |    ,---.  ,---.|  |,-.     |  .--. ' ,---.  ,---. ,--,--,--.
+# |  | |  | |  ||      \ |  ||  |   | .-. || .--'|     /     |  '--'.'| .-. || .-. ||        |
+# |  | '  '-'  '|  ||  | |  ||  '--.' '-' '\ `--.|  \  \     |  |\  \ ' '-' '' '-' '|  |  |  |
+#  \ '. `-----' `--''--'.' / `-----' `---'  `---'`--'`--'    `--' '--' `---'  `---' `--`--`--'
+#   `-'                 `-'
+
 def change_room_lock_state(data: BasicRequest, room_name: str, new_lock_state: bool):
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
     room = rooms[room_name]
-    
+
     if room.is_finished:
         raise HTTPException(detail='The room can no longer be changed', status_code=403)
-    
+
     # this is safe because, usernames are unique by nature and validate_user_request verifies correctness of id-username match
     if room.owner_name != data.username:
         raise HTTPException(detail='You do not have sufficient authority in this room', status_code=403)
-    
+
     room.is_locked = new_lock_state
     rooms[room_name] = room
-    
+
     return Response(
         media_type=MediaType.JSON,
         content=RoomDetailsDTO(room, data.username),
         status_code=200
         )
-    
+
 # lock room
 @post("/rooms/{room_name:str}/lock")
 async def lock_room(data: BasicRequest, room_name: str) -> Response:
     return change_room_lock_state(data, room_name, True)
-    
+
 # lock room
 @post("/rooms/{room_name:str}/unlock")
 async def unlock_room(data: BasicRequest, room_name: str) -> Response:
     return change_room_lock_state(data, room_name, False)
 
-#                                  ,--.                                                                                
-# ,--.  ,--.,--.   ,--.           /  /,------.                               ,--.    ,------.                          
-# |  '--'  |`--' ,-|  | ,---.    /  / |  .--. ' ,---.,--.  ,--.,---.  ,--,--.|  |    |  .--. ' ,---.  ,---. ,--,--,--. 
-# |  .--.  |,--.' .-. || .-. :  /  /  |  '--'.'| .-. :\  `'  /| .-. :' ,-.  ||  |    |  '--'.'| .-. || .-. ||        | 
-# |  |  |  ||  |\ `-' |\   --. /  /   |  |\  \ \   --. \    / \   --.\ '-'  ||  |    |  |\  \ ' '-' '' '-' '|  |  |  | 
-# `--'  `--'`--' `---'  `----'/  /    `--' '--' `----'  `--'   `----' `--`--'`--'    `--' '--' `---'  `---' `--`--`--' 
-#                            `--' 
+#                                  ,--.
+# ,--.  ,--.,--.   ,--.           /  /,------.                               ,--.    ,------.
+# |  '--'  |`--' ,-|  | ,---.    /  / |  .--. ' ,---.,--.  ,--.,---.  ,--,--.|  |    |  .--. ' ,---.  ,---. ,--,--,--.
+# |  .--.  |,--.' .-. || .-. :  /  /  |  '--'.'| .-. :\  `'  /| .-. :' ,-.  ||  |    |  '--'.'| .-. || .-. ||        |
+# |  |  |  ||  |\ `-' |\   --. /  /   |  |\  \ \   --. \    / \   --.\ '-'  ||  |    |  |\  \ ' '-' '' '-' '|  |  |  |
+# `--'  `--'`--' `---'  `----'/  /    `--' '--' `----'  `--'   `----' `--`--'`--'    `--' '--' `---'  `---' `--`--`--'
+#                            `--'
 
 def change_room_hidden_state(data: BasicRequest, room_name: str, new_hidden_state: bool):
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
-    
+
     room = rooms[room_name]
-    
+
     if room.is_finished:
         raise HTTPException(detail='The room can no longer be changed', status_code=403)
-    
+
     # this is safe because, usernames are unique by nature and validate_user_request verifies correctness of id-username match
     if room.owner_name != data.username:
         raise HTTPException(detail='You do not have sufficient authority in this room', status_code=403)
-    
+
     room.is_hidden = new_hidden_state
     rooms[room_name] = room
-    
+
     return Response(
         media_type=MediaType.JSON,
         content=RoomDetailsDTO(room, data.username),
         status_code=200
         )
-    
+
 # hide room
 @post("/rooms/{room_name:str}/hide")
 async def hide_room(data: BasicRequest, room_name: str) -> Response:
     return change_room_hidden_state(data, room_name, True)
-    
+
 # reveal room
 @post("/rooms/{room_name:str}/reveal")
 async def reveal_room(data: BasicRequest, room_name: str) -> Response:
     return change_room_hidden_state(data, room_name, False)
-    
-#  ,-----.,--.,--.                 ,--.      ,------.            ,--.              ,--. ,--.       ,--.                  ,--. 
-# '  .--./|  |`--' ,---. ,--,--, ,-'  '-.    |  .-.  \  ,--,--.,-'  '-. ,--,--.    |  | |  | ,---. |  | ,---.  ,--,--. ,-|  | 
-# |  |    |  |,--.| .-. :|      \'-.  .-'    |  |  \  :' ,-.  |'-.  .-'' ,-.  |    |  | |  || .-. ||  || .-. |' ,-.  |' .-. | 
-# '  '--'\|  ||  |\   --.|  ||  |  |  |      |  '--'  /\ '-'  |  |  |  \ '-'  |    '  '-'  '| '-' '|  |' '-' '\ '-'  |\ `-' | 
-#  `-----'`--'`--' `----'`--''--'  `--'      `-------'  `--`--'  `--'   `--`--'     `-----' |  |-' `--' `---'  `--`--' `---'  
-#                                                                                           `--' 
-    
+
+#  ,-----.,--.,--.                 ,--.      ,------.            ,--.              ,--. ,--.       ,--.                  ,--.
+# '  .--./|  |`--' ,---. ,--,--, ,-'  '-.    |  .-.  \  ,--,--.,-'  '-. ,--,--.    |  | |  | ,---. |  | ,---.  ,--,--. ,-|  |
+# |  |    |  |,--.| .-. :|      \'-.  .-'    |  |  \  :' ,-.  |'-.  .-'' ,-.  |    |  | |  || .-. ||  || .-. |' ,-.  |' .-. |
+# '  '--'\|  ||  |\   --.|  ||  |  |  |      |  '--'  /\ '-'  |  |  |  \ '-'  |    '  '-'  '| '-' '|  |' '-' '\ '-'  |\ `-' |
+#  `-----'`--'`--' `----'`--''--'  `--'      `-------'  `--`--'  `--'   `--`--'     `-----' |  |-' `--' `---'  `--`--' `---'
+#                                                                                           `--'
+
 # post data to room
 @post("/submit-data")
 async def receive_data(data: DataSubmissionRequest) -> Response:
     if not validate_user_request(data.id, data.username):
         raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
-    
+
     # data to pandas conversion
     connections[data.id].data = pickle.loads(base64.b64decode(data.data.encode()))
-    
+
     #if data.data_labels is None or data.categorical_expressions is None or data.ordinal_expressions is None:
     #    raise HTTPException(detail='Invalid data provided', status_code=400)
-    
+
     return Response(
         media_type=MediaType.TEXT,
         content='Data received',
         status_code=200
         )
-    
-# ,------.                     ,--. ,-----. ,------.   
-# |  .--. ',--.,--.,--,--,     |  |'  .-.  '|  .-.  \  
-# |  '--'.'|  ||  ||      \    |  ||  | |  ||  |  \  : 
-# |  |\  \ '  ''  '|  ||  |    |  |'  '-'  '|  '--'  / 
-# `--' '--' `----' `--''--'    `--' `-----' `-------' 
-    
+
+# ,------.                     ,--. ,-----. ,------.
+# |  .--. ',--.,--.,--,--,     |  |'  .-.  '|  .-.  \
+# |  '--'.'|  ||  ||      \    |  ||  | |  ||  |  \  :
+# |  |\  \ '  ''  '|  ||  |    |  |'  '-'  '|  '--'  /
+# `--' '--' `----' `--''--'    `--' `-----' `-------'
+
 def run_riod(data, alpha):
     users = []
-    
+
     ro.r['source']('./scripts/aggregation.r')
     aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
     # Reading and processing data
@@ -841,7 +840,7 @@ def run_riod(data, alpha):
             lv = ro.ListVector(od)
             lvs.append(lv)
             users.append(user)
-            
+
         result = aggregate_ci_results_f(lvs, alpha)
 
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
@@ -849,10 +848,10 @@ def run_riod(data, alpha):
         gi_pag_list = [x[1].tolist() for x in result['Gi_PAG_List'].items()]
         gi_pag_labels = [list(x[1]) for x in result['Gi_PAG_Label_List'].items()]
         return g_pag_list, g_pag_labels,  {u:r for u,r in zip(users, gi_pag_list)}, {u:l for u,l in zip(users, gi_pag_labels)}
-    
+
 def run_iod(data, room_name):
     room = rooms[room_name]
-     
+
     # gather data of all participants
     participant_data = []
     participant_data_labels = []
@@ -861,7 +860,7 @@ def run_iod(data, room_name):
         conn = user2connection[user]
         participant_data.append(conn.data)
         participant_data_labels.append(conn.data_labels)
-        
+
     return run_riod(zip(participants, participant_data, participant_data_labels), alpha=data.alpha)
 
 
@@ -871,20 +870,20 @@ def _provide_fed_glm_data(data, room_name) -> Response:
     if room_name not in rooms:
         raise HTTPException(detail='The room does not exist', status_code=404)
     room = rooms[room_name]
-    
+
     if data.username not in room.federated_glm.pending_data.keys():
         return Response(
             content='The provided data was not required',
             status_code=200
             )
-        
+
     # dont accept data from non-current iteration
     if type(data) == BaseFedGLMRequest and data.current_iteration != room.federated_glm.testing_engine.get_current_test().iterations:
         return Response(
             content='The provided data was not usable in this iteration',
             status_code=200
             )
-        
+
     # handle requests depending on algorithm state
     if type(data) == BaseFedGLMRequest and room.algorithm_state == AlgorithmState.RUNNING:
         fedglm_data = FederatedGLMData(data.data)
@@ -895,17 +894,17 @@ def _provide_fed_glm_data(data, room_name) -> Response:
                 content='The provided data does not fit the currently requested data',
                 status_code=400
                 )
-        
+
     room.federated_glm.pending_data[data.username] = fedglm_data
-    
+
     if any([v is None for v in room.federated_glm.pending_data.values()]):
         rooms[room_name] = room
-    
+
         return Response(
                 content='The provided data was accepted',
                 status_code=200
                 )
-        
+
     if type(room.federated_glm) == FederatedGLMTesting:
         current_engine = room.federated_glm.testing_engine
         fedglm_results = {k:tuple(asdict(d).values()) for k,d in room.federated_glm.pending_data.items()}
@@ -914,11 +913,11 @@ def _provide_fed_glm_data(data, room_name) -> Response:
         fedglm_results = room.federated_glm.pending_data # already correct format
     else:
         raise Exception(f'Unknown Testing Engine type: {type(room.federated_glm)}')
-    
+
     current_engine.aggregate_results(fedglm_results)
-    
+
     categorical_expressions, reversed_categorical_expressions, ordinal_expressions, reversed_ordinal_expressions = get_categorical_and_ordinal_expressions_with_reverse(room)
-    
+
     # HANDLE FINISHED ENGINE
     if current_engine.is_finished and room.algorithm_state == AlgorithmState.RUNNING:
         room.federated_glm = FederatedGLMFixupTesting(room.federated_glm.testing_engine, room, 'categorical')
@@ -930,24 +929,24 @@ def _provide_fed_glm_data(data, room_name) -> Response:
         current_engine = room.federated_glm.fixup_engine
     if current_engine.is_finished and room.algorithm_state == AlgorithmState.FIX_ORDINALS:
         room.algorithm_state = AlgorithmState.FINISHED
-        
+
     # AS LONG AS STATE NOT EQ TO FINISHED, THE ENGINE WILL PROVIDE A TEST
     if room.algorithm_state == AlgorithmState.RUNNING:
         curr_testing_round = current_engine.get_current_test()
-        
+
         #print(f'Running {curr_testing_round}')
-        
+
         # ALL DATA HAS BEEN PROVIDED
-        required_labels = curr_testing_round.get_required_labels()    
+        required_labels = curr_testing_round.get_required_labels()
         required_labels = get_base_labels(required_labels, reversed_categorical_expressions, reversed_ordinal_expressions)
 
         pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
-        
+
         assert len(pending_data) > 0, f'There are no clients who can supply the labels: {required_labels}'
-        
+
         room.federated_glm.pending_data = pending_data
         room.federated_glm.start_of_last_iteration = datetime.datetime.now()
-        
+
     elif room.algorithm_state == AlgorithmState.FIX_CATEGORICALS or room.algorithm_state == AlgorithmState.FIX_ORDINALS:
         _, pending_data, _ = current_engine.get_current_test()
         #print(f'Running fixup {pending_data}')
@@ -956,10 +955,10 @@ def _provide_fed_glm_data(data, room_name) -> Response:
 
     elif room.algorithm_state == AlgorithmState.FINISHED:
         # COULD RUN TESTS ACCORDING TO FCI REQUIREMENTS - requires a lot of work
-        
+
         # TODO: DO LIKELIHOOD RATIO TESTS
         # TODO: RUN FCI
-        
+
         # turn linear models into likelihood ratio tests
         likelihood_ratio_tests = fedci.get_test_results(room.federated_glm.testing_engine.finished_rounds,
                                                         categorical_expressions,
@@ -967,12 +966,12 @@ def _provide_fed_glm_data(data, room_name) -> Response:
                                                         ordinal_expressions,
                                                         reversed_ordinal_expressions
                                                         )
-        
+
         # TODO: BUILD PANDAS DF data with columns for IOD -> X,Y,S,p_value (check again)
         # THEN CALL rIOD
-        
+
         all_labels = list(set([li for l in room.user_provided_labels.values() for li in l]))
-        
+
         columns = ('ord', 'X', 'Y', 'S', 'pvalue')
         rows = []
         for test in likelihood_ratio_tests:
@@ -980,24 +979,24 @@ def _provide_fed_glm_data(data, room_name) -> Response:
             rows.append((len(test.s_labels), all_labels.index(test.x_label)+1, all_labels.index(test.y_label)+1, s_labels_string, test.p_val))
 
         df = pd.DataFrame(data=rows, columns=columns)
-        
+
         # TODO: add alpha configuration per request
-        
+
         try:
             result, result_labels, _, _ = run_riod([(None, df, all_labels)], alpha=0.05)
         except:
             raise HTTPException(detail='Failed to execute FCI', status_code=500)
-        
+
         room.result = result
         room.result_labels = result_labels
-    
+
         room.is_processing = False
         room.is_finished = True
     else:
         raise Exception(f'Unknown State - {room.algorithm_state}')
-    
+
     rooms[room_name] = room
-    
+
     return Response(
             content='The provided data was accepted',
             status_code=200
@@ -1008,12 +1007,12 @@ def provide_fed_glm_data_fixup(data: FixupFedGLMRequest, room_name: str) -> Resp
     return _provide_fed_glm_data(data, room_name)
 
 # TODO: set max regressors
-# todo: should lock written data 
+# todo: should lock written data
 # todo: verify if object is updated by reference or by value - reassigning to dict may not be required
 @post("/rooms/{room_name:str}/federated-glm-data")
 def provide_fed_glm_data(data: BaseFedGLMRequest, room_name: str) -> Response:
     return _provide_fed_glm_data(data, room_name)
-    
+
 # TODO: Make room details have more cols for owner - kick col and new avg. response time col
 
 def get_categorical_and_ordinal_expressions_with_reverse(room):
@@ -1025,10 +1024,10 @@ def get_categorical_and_ordinal_expressions_with_reverse(room):
     for expressions in room.user_provided_ordinal_expressions.values():
         for k,v in expressions.items():
             ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))))
-    
+
     reversed_category_expressions = {vi:k for k,v in categorical_expressions.items() for vi in v}
     reversed_ordinal_expressions = {vi:k for k,v in ordinal_expressions.items() for vi in v}
-            
+
     return categorical_expressions, reversed_category_expressions, ordinal_expressions, reversed_ordinal_expressions
 
 def get_base_labels(labels, rev_cat_exp, rev_ord_exp):
@@ -1041,29 +1040,29 @@ def get_base_labels(labels, rev_cat_exp, rev_ord_exp):
         else:
             result.append(label)
     return result
-    
+
 def run_fed_glm(room_name):
     # data contains alpha for FCI
     room = rooms[room_name]
-    
+
     available_labels = set([vi for v in room.user_provided_labels.values() for vi in v])
     categorical_expressions, reversed_categorical_expressions, ordinal_expressions, reversed_ordinal_expressions = get_categorical_and_ordinal_expressions_with_reverse(room)
 
     testing_engine = fedci.TestingEngine(available_labels, categorical_expressions, ordinal_expressions, max_regressors=None)
     required_labels = testing_engine.get_current_test().get_required_labels()
     required_labels = get_base_labels(required_labels, reversed_categorical_expressions, reversed_ordinal_expressions)
-    
+
     pending_data = {client:None for client, labels in room.user_provided_labels.items() if all([required_label in labels for required_label in required_labels])}
-    
+
     assert len(pending_data) > 0, f'There are no clients who can supply the labels: {required_labels}'
-    
+
     room.federated_glm = FederatedGLMTesting(testing_engine=testing_engine,
                                              pending_data=pending_data,
                                              start_of_last_iteration=datetime.datetime.now()
                                              )
-    
+
     rooms[room_name] = room
-    
+
 @post("/rooms/{room_name:str}/run")
 async def run(data: IODExecutionRequest, room_name: str) -> Response:
     if not validate_user_request(data.id, data.username):
@@ -1075,17 +1074,17 @@ async def run(data: IODExecutionRequest, room_name: str) -> Response:
     # this is safe because, usernames are unique by nature and validate_user_request verifies correctness of id-username match
     if room.owner_name != data.username:
         raise HTTPException(detail='You do not have sufficient authority in this room', status_code=403)
-    
+
     room.is_processing = True
     room.is_locked = True
     room.is_hidden = True
     rooms[room_name] = room
-    
+
     # ToDo change behavior based on room type:
     #   one run for pvalue aggregation only
     #   multiple runs for fedglm -> therefore, return in this function quickly. Set 'is_processing' and update FedGLMStatus etc
     if room.algorithm == Algorithm.P_VALUE_AGGREGATION:
-        
+
         try:
             result, result_labels, user_result, user_labels = run_iod(data, room_name)
         except:
@@ -1095,12 +1094,12 @@ async def run(data: IODExecutionRequest, room_name: str) -> Response:
             room.is_hidden = True
             rooms[room_name] = room
             raise HTTPException(detail='Failed to execute IOD', status_code=500)
-        
+
         room = rooms[room_name]
         for user in user_result:
             if user not in room.users:
                 del user_result[user]
-        
+
         room.result = result
         room.result_labels = result_labels
         room.user_results = user_result
@@ -1113,24 +1112,24 @@ async def run(data: IODExecutionRequest, room_name: str) -> Response:
         room.is_locked = True
         room.is_hidden = True
         rooms[room_name] = room
-        
+
         run_fed_glm(room_name)
-        
+
     else:
         raise HTTPException(detail=f'Cannot run room of type {room.algorithm}', status_code=500)
-    
+
     return Response(
         media_type=MediaType.JSON,
         content=RoomDetailsDTO(room, data.username),
         status_code=200
         )
 
-# ,------.                  ,--.                     ,---.           ,--.                  
-# |  .--. ' ,---. ,--.,--.,-'  '-. ,---. ,--.--.    '   .-'  ,---. ,-'  '-.,--.,--. ,---.  
-# |  '--'.'| .-. ||  ||  |'-.  .-'| .-. :|  .--'    `.  `-. | .-. :'-.  .-'|  ||  || .-. | 
-# |  |\  \ ' '-' ''  ''  '  |  |  \   --.|  |       .-'    |\   --.  |  |  '  ''  '| '-' ' 
-# `--' '--' `---'  `----'   `--'   `----'`--'       `-----'  `----'  `--'   `----' |  |-'  
-#                                                                                  `--' 
+# ,------.                  ,--.                     ,---.           ,--.
+# |  .--. ' ,---. ,--.,--.,-'  '-. ,---. ,--.--.    '   .-'  ,---. ,-'  '-.,--.,--. ,---.
+# |  '--'.'| .-. ||  ||  |'-.  .-'| .-. :|  .--'    `.  `-. | .-. :'-.  .-'|  ||  || .-. |
+# |  |\  \ ' '-' ''  ''  '  |  |  \   --.|  |       .-'    |\   --.  |  |  '  ''  '| '-' '
+# `--' '--' `---'  `----'   `--'   `----'`--'       `-----'  `----'  `--'   `----' |  |-'
+#                                                                                  `--'
 
 app = Litestar([
     health_check,

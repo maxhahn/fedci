@@ -5,6 +5,8 @@ from tqdm.contrib.concurrent import process_map
 import itertools
 import random
 
+# Run with: EXPAND_ORDINALS=1 LR=0.4 LASSO=0.01 python3 run_tests.py
+
 # Setup Data
 # ## L-B CASE
 # Unc. Indep. Case
