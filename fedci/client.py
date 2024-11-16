@@ -6,7 +6,7 @@ import numpy as np
 
 from typing import Dict, List
 
-from .env import DEBUG, EXPAND_ORDINALS
+from .env import DEBUG, EXPAND_ORDINALS, LR
 
 import statsmodels.api as sm
 from statsmodels.genmod.generalized_linear_model import GLMResults
@@ -35,8 +35,8 @@ class ComputationHelper():
         derivative_inverse_link = model.family.link.inverse_deriv
         dmu_deta = derivative_inverse_link(eta)
 
-        z = eta + (y - mu)/dmu_deta
-        W = np.diag((dmu_deta**2)/max(np.var(mu), 1e-8))
+        z = eta + LR*(y - mu)/dmu_deta
+        W = np.diag((dmu_deta**2)/np.nanmax([np.var(mu), 1e-4]))
 
         xw = X.T @ W
         xwx = xw @ X
@@ -137,7 +137,7 @@ class CategoricalComputationUnit(ComputationUnit):
 
             # beta update
             z = etas[category] + (y - mus[category])/dmu_deta[category]
-            W = np.diag((dmu_deta[category]**2)/max(np.var(mus[category]), 1e-15))
+            W = np.diag((dmu_deta[category]**2)/np.nanmax([np.var(mus[category]), 1e-4]))
 
             xw = X.T @ W
             xwx = xw @ X
@@ -197,6 +197,7 @@ class OrdinalComputationUnit(ComputationUnit):
         llf_saturated = 0
         # Calculate data for Y=1
         level, mu0 = model_list[0]
+        mu0 = np.clip(mu0, 1e-10, 1-1e-10)
         level_int = int(level.split('__ord__')[-1])
         current_level_indices = data[y_label].to_numpy() == level_int
         reference_level_indices = 1-current_level_indices
@@ -208,18 +209,23 @@ class OrdinalComputationUnit(ComputationUnit):
             _, mu0 = model_list[i-1]
             level, mu1 = model_list[i]
 
-            mu_diff = np.clip(mu1 - mu0, 1e-15, 1-1e-15)
+            mu0 = np.clip(mu0, 1e-10, 1-1e-10)
+            mu1 = np.clip(mu1, 1e-10, 1-1e-10)
+
+            mu_diff = np.clip(mu1 - mu0, 1e-10, 1-1e-10)
 
             # update reference category indices
             level_int = int(level.split('__ord__')[-1])
             current_level_indices = data[y_label].to_numpy() == level_int
             reference_level_indices = reference_level_indices * (1-current_level_indices)
+
             # LLF
             llf += np.sum(np.log(np.take(mu_diff, current_level_indices.nonzero()[0])))
             #llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
         # Calculate data for Y=M
         _, mu1 = model_list[-1]
-        llf += np.sum(np.log(np.take(np.clip(1-mu1, 1e-15, 1-1e-15), reference_level_indices.nonzero()[0])))
+        mu1 = np.clip(mu1, 1e-10, 1-1e-10)
+        llf += np.sum(np.log(np.take(np.clip(1-mu1, 1e-10, 1-1e-10), reference_level_indices.nonzero()[0])))
         #llf_saturated += np.sum(reference_level_indices * np.log(np.clip(reference_level_indices, 1e-10, None)))
         deviance = 2 * (llf_saturated - llf)
 

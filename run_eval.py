@@ -7,7 +7,7 @@ import glob
 
 # %%
 # Load data
-path =  './experiments/expanded_ordinals/*ndjson'
+path =  './experiments/expanded_ordinals/2*ndjson'
 try:
     df = pl.read_ndjson(path, ignore_errors=True)
 except:
@@ -28,7 +28,9 @@ df = df.with_columns(
     experiment_type=pl.col('name').str.slice(0,3),
     conditioning_type=pl.col('name').str.slice(4)
 )
-print(df['experiment_type'].value_counts())
+
+print(df.group_by('experiment_type', 'conditioning_type').agg(pl.len()).sort('len'))
+df = df.sort('experiment_type', 'conditioning_type')
 df = df.explode('predicted_p_values', 'true_p_values')
 
 # Plot scatter of p values
@@ -44,7 +46,7 @@ plot = df.hvplot.scatter(
     col='conditioning_type',
     groupby=['num_clients', 'num_samples'],
     subplots=True,
-    widget_location='bottom'
+    #widget_location='bottom'
     )
 
 hvplot.save(plot, 'images/p_value_scatter.html')
@@ -61,11 +63,11 @@ plot = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   row='experiment_type',
                                   col='conditioning_type',
                                   groupby=['num_clients'],
-                                  ylim=(0.9,1.01),
+                                  ylim=(-1.5,1.5),
                                   width=400,
                                   height=400,
                                   subplots=True,
-                                  widget_location='bottom'
+                                  #widget_location='bottom'
                                   )
 
 hvplot.save(plot, 'images/p_value_corr.html')
@@ -89,10 +91,10 @@ plot = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   row='experiment_type',
                                   col='conditioning_type',
                                   groupby=['num_clients'],
-                                  ylim=(0.9,1.01),
+                                  ylim=(-1.5,1.5),
                                   width=400,
                                   height=400,
                                   subplots=True,
-                                  widget_location='bottom'
+                                  #widget_location='bottom'
                                   )
 hvplot.save(plot, 'images/p_value_acc.html')

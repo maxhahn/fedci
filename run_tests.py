@@ -134,11 +134,12 @@ node_collections = [
     nc941, nc942, nc943, nc944,
     nc951, nc952, nc953, nc954,
 ]
-#node_collections = [nc942]
+
 num_samples = [
-    100, 200, 300, 400,
+    100,
+    #200, 300, 400,
     500, #600, 700, 800,
-    750,
+    #750,
     #900,
     1000,
     #1250,
@@ -146,23 +147,23 @@ num_samples = [
     #1750,
     2000,
     #2500,
-    3000
+    #3000
 ]
 num_clients = [
-    1, 3, 5
+    1, 3,# 5
 ]
 
-file_info = ('./experiments/expanded_ordinals', 'tests.ndjson')
+file_info = ('./experiments/t2', 'tests.ndjson')
 
 configurations = list(itertools.product(node_collections, num_samples, num_clients))
 configurations = [c + file_info for c in configurations]
 
-num_runs = 100
+num_runs = 50
 
 configurations *= num_runs
-random.shuffle(configurations)
+#random.shuffle(configurations)
 
 # Run tests
-process_map(run_configured_test, configurations, max_workers=5, chunksize=25)
+process_map(run_configured_test, configurations, max_workers=5, chunksize=10)
 #for i, configuration in enumerate(tqdm(configurations)):
 #    run_configured_test(configuration)

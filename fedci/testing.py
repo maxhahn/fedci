@@ -3,7 +3,7 @@ import numpy as np
 from typing import List, Dict
 from itertools import chain, combinations
 
-from .env import EXPAND_ORDINALS
+from .env import EXPAND_ORDINALS, LASSO
 from .utils import BetaUpdateData, ClientResponseData, VariableType
 
 class RegressionTest():
@@ -15,6 +15,11 @@ class RegressionTest():
     def update_beta(self, data: List[BetaUpdateData]):
         xwx = sum([d.xwx for d in data])
         xwz = sum([d.xwz for d in data])
+
+        if LASSO > 0:
+            penalty_matrix = LASSO * np.eye(len(xwx))
+            penalty_matrix[-1, -1] = 0  # Don't penalize intercept
+            xwx += penalty_matrix
 
         try:
             xwx_inv = np.linalg.inv(xwx)

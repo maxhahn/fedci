@@ -132,7 +132,9 @@ node_collections = [
     #nc931, nc932, nc933, nc934,
     #nc941, #nc942, nc943, nc944,
     #nc951, nc952,
-    nc953#, nc954,
+    #nc952, # Unc Dep -> craters p corr around 1-2k samples
+    nc953 # Con Dep. -> Gets most NaNs
+    #, nc954,
 ]
 num_samples = [
     #100, 200, 300, 400,
@@ -153,22 +155,33 @@ configurations = [c + file_info for c in configurations]
 num_runs = 1
 
 configurations *= num_runs
+
+#{"name": "M-O Con. Dep.", "num_clients": 1,
+#    "num_samples": 100,
+#    "max_regressors": null,
+#    "expanded_ordinals": true,
+#    "predicted_p_values": [0.4993, 0.0021, 0.0, 0.0, 0.0003, NaN],
+#    "true_p_values": [0.4993, 0.0001, 0.0, 0.0, 0.0003, 0.0],
+#    "seed": 65522865}
+
+conf = (nc953, 100, 1, "", "")
+
 # Run tests
 #process_map(run_configured_test, configurations, max_workers=5, chunksize=10)
 #for i, configuration in enumerate(tqdm(configurations[:1], disable=True)):
 #    run_configured_test(configuration, 2)
 #for i in range(20):
 #    run_configured_test(configurations[0], i+20)
-#run_configured_test(configurations[0], 32)
-import polars as pl
-df = pl.read_parquet("./error-data-03.parquet")
-run_test_on_data(
-    df,
-    "test-data",
-    1,
-    "experiments/dummy",
-    "test.ndjson"
-)
+run_configured_test(conf, 65522865)
+#import polars as pl
+#df = pl.read_parquet("./error-data-02.parquet")
+#run_test_on_data(
+#    df,
+#    "test-data",
+#    1,
+#    "experiments/dummy",
+#    "test.ndjson"
+#)
 
 import pandas as pd
 import statsmodels.api as sm

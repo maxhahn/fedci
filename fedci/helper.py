@@ -5,13 +5,14 @@ import fcntl
 import json
 from pathlib import Path
 import numpy as np
+import random
 
 from dgp import NodeCollection
 
 from .server import Server
 from .client import Client
 from .evaluation import get_symmetric_likelihood_tests, get_riod_tests, compare_tests_to_truth
-from .env import DEBUG, EXPAND_ORDINALS, LOG_R
+from .env import DEBUG, EXPAND_ORDINALS, LOG_R, SEEDED, LR, LASSO
 
 import rpy2.rinterface_lib.callbacks as cb
 
@@ -39,7 +40,7 @@ def run_configured_test(config, seed=None):
     if seed is not None:
         if DEBUG >= 1: print(f'Current seed: {seed}')
         np.random.seed(seed)
-    if not os.path.exists(target_directory):
+    if not os.path.exists(target_directory) and not (DEBUG >= 1):
         os.makedirs(target_directory, exist_ok=True)
     target_file = f'{os.getpid()}-{target_file}'
     return run_test(dgp_nodes=node_collection,
@@ -56,6 +57,9 @@ def run_test(dgp_nodes: NodeCollection,
              target_file,
              max_regressors=None
              ):
+    if SEEDED >= 1:
+        seed = random.randrange(2**32)
+        np.random.seed(seed)
     dgp_nodes = copy.deepcopy(dgp_nodes)
     dgp_nodes.reset()
     data = dgp_nodes.get(num_samples)
@@ -65,7 +69,8 @@ def run_test(dgp_nodes: NodeCollection,
                             num_clients,
                             target_directory,
                             target_file,
-                            max_regressors
+                            max_regressors,
+                            seed=None if SEEDED==0 else seed
                             )
 
 def run_test_on_data(data,
@@ -74,6 +79,7 @@ def run_test_on_data(data,
                      target_directory,
                      target_file,
                      max_regressors=None,
+                     seed=None
                      ):
     if DEBUG >= 1:
         print("*** Data schema")
@@ -102,6 +108,9 @@ def run_test_on_data(data,
         'num_samples': len(data),
         'max_regressors': max_regressors,
         'expanded_ordinals': True if EXPAND_ORDINALS == 1 else False,
+        'lr': LR,
+        'lasso': LASSO,
+        'seed': seed,
         'predicted_p_values': predicted_p_values,
         'true_p_values': true_p_values
     }
