@@ -1,21 +1,22 @@
 from enum import Enum
 from dataclasses import dataclass
 import datetime
-from typing import Optional, Union, Dict, List, Set
+from typing import Union, Dict, List, Set
 import pandas as pd
 import numpy as np
 
-from .helpers import deserialize_numpy_array
-from .. import fedci
+from ls_helpers import deserialize_numpy_array, serialize_numpy_array
+
+import fedci
 
 class Algorithm(str, Enum):
     P_VALUE_AGGREGATION = 'IOD'
     FEDERATED_GLM = 'FEDGLM'
 
 @dataclass
-class RIODUserData()
+class RIODUserData():
     data_labels: List[str]
-    data: Optional[pd.DataFrame]
+    data: pd.DataFrame | None
 
 @dataclass
 class FEDGLMUserData():
@@ -33,27 +34,27 @@ class Connection:
 
 @dataclass
 class FEDGLMUpdateDataDTO:
-    xwx: object
-    xwz: object
+    xwx: Dict[str, object]
+    xwz: Dict[str, object]
     dev: float
     llf: float
 
 @dataclass
 class FEDGLMUpdateData:
-    xwx: np.typing.NDArray
-    xwz: np.typing.NDArray
+    xwx: Dict[str, np.typing.NDArray]
+    xwz: Dict[str, np.typing.NDArray]
     dev: float
     llf: float
 
     def __init__(self, data: FEDGLMUpdateDataDTO):
-        self.xwx = deserialize_numpy_array(data.xwx)
-        self.xwz = deserialize_numpy_array(data.xwz)
+        self.xwx = {c:deserialize_numpy_array(xwx) for c, xwx in data.xwx.items()}
+        self.xwz = {c:deserialize_numpy_array(xwz) for c, xwz in data.xwz.items()}
         self.dev = data.dev
         self.llf = data.llf
 
 @dataclass
 class FEDGLMState:
-    schema: Dict[str, fedci.VariableType]
+    schema: Dict[str, Dict[str, fedci.VariableType]]
     categorical_expressions: Dict[str, Dict[str, List[str]]]
     ordinal_expressions: Dict[str, Dict[str, List[str]]]
     testing_engine: fedci.TestEngine
@@ -70,7 +71,7 @@ class Room:
     algorithm: Algorithm
     algorithm_state: Union[FEDGLMState, RIODState]
     owner_name: str
-    password: Optional[str]
+    password: str | None
     is_locked: bool
     is_hidden: bool
     is_processing: bool
@@ -109,9 +110,27 @@ class RoomDTO:
         self.is_protected = room.password is not None
 
 @dataclass
+class FEDGLMInformation:
+    categorical_expressions: Dict[str, Dict[str, List[str]]]
+    ordinal_expressions: Dict[str, Dict[str, List[str]]]
+    current_beta: Dict[str, object]
+    current_iteration: int
+    y_label: str
+    X_labels: List[str]
+
+    def __init__(self, testing_engine: fedci.TestEngine):
+        self.categorical_expressions = testing_engine.categorical_expressions
+        self.ordinal_expressions = testing_engine.ordinal_expressions if fedci.EXPAND_ORDINALS else None
+        self.y_label, self.X_labels, self.current_beta = testing_engine.get_current_test_parameters()
+        self.current_beta = {k:serialize_numpy_array(v) for k,v in self.current_beta.items()}
+        self.current_iteration = testing_engine.get_current_test_iteration()
+
+
+@dataclass
 class RoomDetailsDTO:
     name: str
     algorithm: Algorithm
+    algorithm_info: FEDGLMInformation | None
     owner_name: str
     is_locked: bool
     is_hidden: bool
@@ -124,12 +143,13 @@ class RoomDetailsDTO:
     result_labels: List[List[str]]
     private_result: List[List[int]]
     private_labels: List[str]
-    categorical_expressions: Optional[Dict[str, List[str]]]
-    ordinal_expressions: Optional[Dict[str, List[str]]]
 
     def __init__(self, room: Room, requesting_user: Union[str,None]=None):
         self.name = room.name
         self.algorithm = room.algorithm
+        self.algorithm_info = FEDGLMInformation(room.algorithm_state.testing_engine) if (
+            self.algorithm == Algorithm.FEDERATED_GLM and not room.algorithm_state.testing_engine.is_finished()
+        ) else None
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
         self.is_hidden = room.is_hidden
@@ -138,21 +158,6 @@ class RoomDetailsDTO:
         self.is_protected = room.password is not None
         self.users = sorted(list(room.users))
         self.user_provided_labels = room.user_provided_labels
-
-        # TODO: prevent repeated calculation of this
-        categorical_expressions = {}
-        for expressions in room.algorithm_state.user_provided_categorical_expressions.values():
-            for k,v in expressions.items():
-                categorical_expressions[k] = sorted(list(set(categorical_expressions.get(k, [])).union(set(v))))
-        self.categorical_expressions = categorical_expressions
-
-        if fedci.EXPAND_ORDINALS:
-            ordinal_expressions = {}
-            for expressions in room.algorithm_state.user_provided_ordinal_expressions.values():
-                for k,v in expressions.items():
-                    ordinal_expressions[k] = sorted(list(set(ordinal_expressions.get(k, [])).union(set(v))), key=lambda x: int(x.split('__ord__')[-1]))
-            self.ordinal_expressions = ordinal_expressions
-
         self.result = room.result
         self.result_labels = room.result_labels
         self.private_result = room.user_results[requesting_user] if room.user_results is not None and requesting_user in room.user_results else None
@@ -163,11 +168,11 @@ class CheckInRequest:
     username: str
     algorithm: str
     # riod
-    data_labels: Optional[List[str]]
+    data_labels: List[str] | None
     # fedglm
-    schema: Optional[object]
-    categorical_expressions: Optional[Dict[str, List[str]]]
-    ordinal_expressions: Optional[Dict[str, List[str]]]
+    schema: object | None
+    categorical_expressions: Dict[str, List[str]] | None
+    ordinal_expressions: Dict[str, List[str]] | None
 
 @dataclass
 class BasicRequest:

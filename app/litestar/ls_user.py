@@ -1,8 +1,8 @@
 from litestar import Controller, post, Response, MediaType
 from litestar.exceptions import HTTPException
-from .data_structures import Algorithm, Connection, Room, CheckInRequest, UpdateUserRequest, FEDGLMAlgorithmData, RIODAlgorithmData, UserDTO, RIODDataSubmissionRequest
-from .env import connections, user2connection
-from .helpers import validate_user_request
+from ls_data_structures import Algorithm, Connection, FEDGLMUserData, RIODUserData, Room, CheckInRequest, UpdateUserRequest, UserDTO, RIODDataSubmissionRequest
+from ls_env import connections, user2connection
+from ls_helpers import validate_user_request
 
 import uuid
 import datetime
@@ -35,13 +35,13 @@ class UserController(Controller):
 
         selected_algorithm = Algorithm(data.algorithm)
         if selected_algorithm == Algorithm.FEDERATED_GLM:
-            provided_data = FEDGLMAlgorithmData(
+            provided_data = FEDGLMUserData(
                 schema=data.schema,
                 categorical_expressions=data.categorical_expressions,
                 ordinal_expressions=data.ordinal_expressions
             )
         elif selected_algorithm == Algorithm.P_VALUE_AGGREGATION:
-            provided_data = RIODAlgorithmData(
+            provided_data = RIODUserData(
                 data_labels = data.data_labels,
                 data=None
             )

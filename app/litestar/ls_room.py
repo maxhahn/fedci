@@ -3,13 +3,15 @@ from litestar import get, post, MediaType, Response
 from litestar.exceptions import HTTPException
 import pickle
 import base64
-from .data_structures import (
+
+from ls_data_structures import (
     RoomDTO, RoomDetailsDTO,
     BasicRequest, RoomCreationRequest, JoinRoomRequest,
     Algorithm, Room, FEDGLMState, RIODState
 )
-from .helpers import validate_user_request
-from .env import rooms, connections, user2room
+from ls_env import rooms, connections, user2room
+from ls_helpers import validate_user_request
+
 
 class RoomController(Controller):
     path = '/rooms'
@@ -64,14 +66,7 @@ class RoomController(Controller):
 
         selected_algorithm = Algorithm(data.algorithm)
         if selected_algorithm == Algorithm.FEDERATED_GLM:
-            algorithm_state = FEDGLMState(
-                user_provided_labels={room_owner: connections[data.id].provided_data.data_labels},
-                user_provided_categorical_expressions={room_owner: connections[data.id].provided_data.categorical_expressions},
-                user_provided_ordinal_expressions={room_owner: connections[data.id].provided_data.ordinal_expressions},
-                testing_engine=None,
-                pending_data=None,
-                start_of_last_iteration=None
-            )
+            algorithm_state = None
         elif selected_algorithm == Algorithm.P_VALUE_AGGREGATION:
             algorithm_state= RIODState(
                 user_provided_labels={room_owner: connections[data.id].provided_data.data_labels}
@@ -297,4 +292,4 @@ class RoomController(Controller):
     # reveal room
     @post("/{room_name:str}/reveal")
     async def reveal_room(self, data: BasicRequest, room_name: str) -> Response:
-        return self.change_room_hidden_state(data, room_name, False)                                                                                      `--'
+        return self.change_room_hidden_state(data, room_name, False)

@@ -145,6 +145,8 @@ class TestEngine():
 
         self.tests = []
         self.max_iterations = max_iterations
+        self.categorical_expressions = category_expressions
+        self.ordinal_expressions = ordinal_expressions
 
         variables = set(schema.keys())
         max_conditioning_set_size = min(len(variables)-1, max_regressors) if max_regressors is not None else len(variables)-1
@@ -203,11 +205,15 @@ class TestEngine():
     def is_finished(self):
         return self.current_test_index >= len(self.tests)
 
+    def get_current_test_iteration(self):
+        if self.is_finished():
+            return None
+        return self.tests[self.current_test_index].iterations
+
     def get_currently_required_labels(self):
         if self.is_finished():
             return None
-        current_test = self.tests[self.current_test_index]
-        return current_test.get_required_labels()
+        return self.tests[self.current_test_index].get_required_labels()
 
     def get_current_test_parameters(self):
         if self.is_finished():

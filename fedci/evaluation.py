@@ -24,7 +24,7 @@ class LikelihoodRatioTest():
         self.x_label = list(t1_req_labels - t0_req_labels)[0]
         self.s_labels = sorted(list(t0_req_labels))
 
-        self.p_val = round(self._run_ci_test(t0, t1), 4)
+        self.p_val = self._run_ci_test(t0, t1)
 
     def _run_ci_test(self, t0: Test, t1: Test):
         client_subset = t1.get_providing_clients()
@@ -44,7 +44,7 @@ class LikelihoodRatioTest():
         return p_val
 
     def __repr__(self):
-        return f"LikelihoodRatioTest - y: {self.y_label}, x: {self.x_label}, S: {self.s_labels}, p: {self.p_val}"
+        return f"LikelihoodRatioTest - y: {self.y_label}, x: {self.x_label}, S: {self.s_labels}, p: {self.p_val:.4f}"
 
     def __lt__(self, other):
         if len(self.s_labels) < len(other.s_labels):
@@ -89,7 +89,7 @@ class SymmetricLikelihoodRatioTest():
 
 
     def __repr__(self):
-        return f"SymmetricLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val}\n\t- {self.lrt0}\n\t- {self.lrt1}"
+        return f"SymmetricLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val:.4f}\n\t- {self.lrt0}\n\t- {self.lrt1}"
 
     def __lt__(self, other):
         if self.v0 < other.v0:
@@ -116,10 +116,10 @@ class EmptyLikelihoodRatioTest(SymmetricLikelihoodRatioTest):
     def __init__(self, v0, v1, conditioning_set, p_val):
         self.v0, self.v1 = sorted([v0, v1])
         self.conditioning_set = conditioning_set
-        self.p_val = round(p_val, 4)
+        self.p_val = p_val
 
     def __repr__(self):
-        return f"EmptyLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val}"
+        return f"EmptyLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val:.4f}"
 
 def get_likelihood_tests(tests: List[Test]):
     likelihood_tests = []

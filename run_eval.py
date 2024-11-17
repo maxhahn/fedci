@@ -7,7 +7,7 @@ import glob
 
 # %%
 # Load data
-path =  './experiments/t2/*ndjson'
+path =  './experiments/r1/*ndjson'
 try:
     df = pl.read_ndjson(path, ignore_errors=True)
 except:
@@ -49,7 +49,7 @@ plot = df.hvplot.scatter(
     #widget_location='bottom'
     )
 
-hvplot.save(plot, 'images/p_value_scatter.html')
+#hvplot.save(plot, 'images/p_value_scatter.html')
 
 # Plot correlation of p values
 _df = df
@@ -58,14 +58,17 @@ df_correlation_fix = df_correlation_fix.group_by('name', 'num_clients', 'num_sam
 df_correlation_fix = df_correlation_fix.filter(pl.col('all_corrects')).drop('all_corrects')
 df_correlation_fix = df_correlation_fix.with_columns(correlation_fix=pl.lit(1.0))
 
-_df = _df.group_by('name', 'experiment_type', 'conditioning_type', 'num_clients', 'num_samples') \
-    .agg(pl.corr('predicted_p_values', 'true_p_values')) \
-    .rename({'predicted_p_values': 'p_value_correlation'})
+_df = _df.group_by(
+    'name', 'experiment_type', 'conditioning_type', 'num_clients', 'num_samples'
+).agg(
+    p_value_correlation=pl.corr('predicted_p_values', 'true_p_values')
+)
 
 _df = _df.join(df_correlation_fix, on=['name', 'num_clients', 'num_samples'], how='left')
 _df = _df.with_columns(pl.col('p_value_correlation').replace_strict({float('NaN'): None}, default=pl.col('p_value_correlation')))
 _df = _df.with_columns(pl.coalesce(['p_value_correlation', 'correlation_fix'])).drop('correlation_fix')
 
+#print(_df.filter(pl.col('p_value_correlation').is_null()))
 assert _df['p_value_correlation'].null_count() == 0, 'NaN in correlations'
 
 plot = _df.sort('num_samples').hvplot.line(x='num_samples',
@@ -74,7 +77,7 @@ plot = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   row='experiment_type',
                                   col='conditioning_type',
                                   groupby=['num_clients'],
-                                  ylim=(-1.5,1.5),
+                                  ylim=(0.95,1.01),
                                   width=400,
                                   height=400,
                                   subplots=True,
@@ -102,7 +105,7 @@ plot = _df.sort('num_samples').hvplot.line(x='num_samples',
                                   row='experiment_type',
                                   col='conditioning_type',
                                   groupby=['num_clients'],
-                                  ylim=(-1.5,1.5),
+                                  ylim=(0.95,1.01),
                                   width=400,
                                   height=400,
                                   subplots=True,

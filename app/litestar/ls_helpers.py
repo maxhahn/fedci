@@ -1,4 +1,4 @@
-from .env import connections, rooms, user2room, user2connection
+from ls_env import connections, rooms, user2room, user2connection
 import datetime
 import json
 import numpy as np
