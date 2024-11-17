@@ -1,6 +1,6 @@
 from typing import Dict
 import datetime
-
+from typing import Optional
 rooms: Dict[str, object] = {}
 connections: Dict[str, object] = {}
 

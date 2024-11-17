@@ -38,7 +38,7 @@
     "containerUser": "dev",
 
     // Forward ports if needed
-    "forwardPorts": [40010],
+    "forwardPorts": [8000, 8001, 8002, 8501],
 
     // Wait for the container to be ready
     "waitFor": "onCreateCommand",

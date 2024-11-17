@@ -4,7 +4,7 @@ import datetime
 from typing import Union, Dict, List, Set
 import pandas as pd
 import numpy as np
-
+from typing import Optional
 from ls_helpers import deserialize_numpy_array, serialize_numpy_array
 
 import fedci
@@ -20,7 +20,8 @@ class RIODUserData():
 
 @dataclass
 class FEDGLMUserData():
-    schema: Dict[str, Dict[str, fedci.VariableType]]
+    data_labels: List[str]
+    schema: Dict[str, fedci.VariableType]
     categorical_expressions: Dict[str, List[str]]
     ordinal_expressions: Dict[str, List[str]]
 
@@ -55,6 +56,7 @@ class FEDGLMUpdateData:
 @dataclass
 class FEDGLMState:
     schema: Dict[str, Dict[str, fedci.VariableType]]
+    user_provided_labels: Dict[str, List[str]]
     categorical_expressions: Dict[str, Dict[str, List[str]]]
     ordinal_expressions: Dict[str, Dict[str, List[str]]]
     testing_engine: fedci.TestEngine
@@ -111,6 +113,7 @@ class RoomDTO:
 
 @dataclass
 class FEDGLMInformation:
+    is_awaiting_response: bool
     categorical_expressions: Dict[str, Dict[str, List[str]]]
     ordinal_expressions: Dict[str, Dict[str, List[str]]]
     current_beta: Dict[str, object]
@@ -118,7 +121,8 @@ class FEDGLMInformation:
     y_label: str
     X_labels: List[str]
 
-    def __init__(self, testing_engine: fedci.TestEngine):
+    def __init__(self, testing_engine: fedci.TestEngine, is_awaiting_response: bool):
+        self.is_awaiting_response = is_awaiting_response
         self.categorical_expressions = testing_engine.categorical_expressions
         self.ordinal_expressions = testing_engine.ordinal_expressions if fedci.EXPAND_ORDINALS else None
         self.y_label, self.X_labels, self.current_beta = testing_engine.get_current_test_parameters()
@@ -147,8 +151,11 @@ class RoomDetailsDTO:
     def __init__(self, room: Room, requesting_user: Union[str,None]=None):
         self.name = room.name
         self.algorithm = room.algorithm
-        self.algorithm_info = FEDGLMInformation(room.algorithm_state.testing_engine) if (
-            self.algorithm == Algorithm.FEDERATED_GLM and not room.algorithm_state.testing_engine.is_finished()
+        self.algorithm_info = FEDGLMInformation(
+            room.algorithm_state.testing_engine,
+            requesting_user is not None and requesting_user in room.algorithm_state.pending_data and room.algorithm_state.pending_data.get(requesting_user) is None
+        ) if (
+            self.algorithm == Algorithm.FEDERATED_GLM and room.algorithm_state.testing_engine is not None and not room.algorithm_state.testing_engine.is_finished()
         ) else None
         self.owner_name = room.owner_name
         self.is_locked = room.is_locked
@@ -157,7 +164,7 @@ class RoomDetailsDTO:
         self.is_finished = room.is_finished
         self.is_protected = room.password is not None
         self.users = sorted(list(room.users))
-        self.user_provided_labels = room.user_provided_labels
+        self.user_provided_labels = room.algorithm_state.user_provided_labels
         self.result = room.result
         self.result_labels = room.result_labels
         self.private_result = room.user_results[requesting_user] if room.user_results is not None and requesting_user in room.user_results else None

@@ -3,12 +3,11 @@ from litestar.exceptions import HTTPException
 from ls_data_structures import Algorithm, Connection, FEDGLMUserData, RIODUserData, Room, CheckInRequest, UpdateUserRequest, UserDTO, RIODDataSubmissionRequest
 from ls_env import connections, user2connection
 from ls_helpers import validate_user_request
-
+from typing import Optional
 import uuid
 import datetime
 import pickle
 import base64
-
 
 class UserController(Controller):
     path = '/user'
@@ -36,6 +35,7 @@ class UserController(Controller):
         selected_algorithm = Algorithm(data.algorithm)
         if selected_algorithm == Algorithm.FEDERATED_GLM:
             provided_data = FEDGLMUserData(
+                data_labels = data.data_labels,
                 schema=data.schema,
                 categorical_expressions=data.categorical_expressions,
                 ordinal_expressions=data.ordinal_expressions
@@ -43,6 +43,7 @@ class UserController(Controller):
         elif selected_algorithm == Algorithm.P_VALUE_AGGREGATION:
             provided_data = RIODUserData(
                 data_labels = data.data_labels,
+                schema=data.schema,
                 data=None
             )
         else:
@@ -63,7 +64,7 @@ class UserController(Controller):
             status_code=200
             )
 
-    @post("/update-user")
+    @post("/update")
     async def update_user(self, data: UpdateUserRequest) -> Response:
         if not validate_user_request(data.id, data.username):
             raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)

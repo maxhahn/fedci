@@ -1,5 +1,5 @@
 from litestar import Litestar, get, Response, MediaType
-
+from typing import Optional
 import sys
 import os
 # Add the parent directory to sys.path
@@ -27,7 +27,7 @@ async def health_check() -> Response:
     )
 
 
-Litestar(route_handlers=[
+app = Litestar([
     health_check,
     UserController,
     RoomController,

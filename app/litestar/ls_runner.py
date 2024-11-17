@@ -1,6 +1,6 @@
 from litestar import Controller, Response, MediaType, post
 from litestar.exceptions import HTTPException
-
+from typing import Optional
 from ls_data_structures import IODExecutionRequest, Algorithm, RoomDetailsDTO, FEDGLMState, UpdateFEDGLMRequest, FEDGLMUpdateData
 from ls_env import connections, rooms, user2connection
 from ls_helpers import validate_user_request
@@ -84,19 +84,23 @@ class AlgorithmController(Controller):
             category_expressions=category_expressions,
             ordinal_expressions=ordinal_expressions
         )
-        required_labels = testing_engine.get_currently_required_labels()
-
-        pending_data = {client:None for client, schema in room.algorithm_state.schema.items() if set(required_labels).issubset(schema.keys())}
-        assert len(pending_data) > 0, f'There are no clients who can supply the labels: {required_labels}'
 
         room.algorithm_state = FEDGLMState(
             schema=schema,
+            user_provided_labels=room.algorithm_state.user_provided_labels,
             categorical_expressions=category_expressions,
             ordinal_expressions=ordinal_expressions if fedci.EXPAND_ORDINALS else None,
             testing_engine=testing_engine,
-            pending_data=pending_data,
+            pending_data=None,
             start_of_last_iteration=datetime.datetime.now()
         )
+
+        required_labels = testing_engine.get_currently_required_labels()
+
+        pending_data = {client:None for client, labels in room.algorithm_state.user_provided_labels.items() if set(required_labels).issubset(labels)}
+        assert len(pending_data) > 0, f'There are no clients who can supply the labels: {required_labels}'
+        room.algorithm_state.pending_data = pending_data
+
 
         rooms[room_name] = room
         return
@@ -132,25 +136,25 @@ class AlgorithmController(Controller):
                     )
 
         result = {}
-        for client, data in room.algorithm_state.pending_data.items():
+        for client, _data in room.algorithm_state.pending_data.items():
             beta_update = {}
-            for c in data.xwx.keys():
-                beta_update[c] = fedci.BetaUpdateData(data.xwx[c], data.xwz[c])
-            r = fedci.ClientResponseData(data.llf, data.dev, beta_update)
+            for c in _data.xwx.keys():
+                beta_update[c] = fedci.BetaUpdateData(_data.xwx[c], _data.xwz[c])
+            r = fedci.ClientResponseData(_data.llf, _data.dev, beta_update)
             result[client] = r
 
         room.algorithm_state.testing_engine.update_current_test(result)
 
         if room.algorithm_state.testing_engine.is_finished():
-            likelihood_ratio_tests = get_symmetric_likelihood_tests(room.algorithm_state.testing_engine.tests)
+            likelihood_ratio_tests = fedci.get_symmetric_likelihood_tests(room.algorithm_state.testing_engine.tests)
 
             all_labels = list(set([li for l in room.algorithm_state.user_provided_labels.values() for li in l]))
 
             columns = ('ord', 'X', 'Y', 'S', 'pvalue')
             rows = []
             for test in likelihood_ratio_tests:
-                s_labels_string = ','.join(sorted([str(all_labels.index(l)+1) for l in test.s_labels]))
-                rows.append((len(test.s_labels), all_labels.index(test.x_label)+1, all_labels.index(test.y_label)+1, s_labels_string, test.p_val))
+                s_labels_string = ','.join(sorted([str(all_labels.index(l)+1) for l in test.conditioning_set]))
+                rows.append((len(test.conditioning_set), all_labels.index(test.v0)+1, all_labels.index(test.v1)+1, s_labels_string, test.p_val))
 
             df = pd.DataFrame(data=rows, columns=columns)
 
@@ -166,6 +170,11 @@ class AlgorithmController(Controller):
 
             room.is_processing = False
             room.is_finished = True
+        else:
+            required_labels = room.algorithm_state.testing_engine.get_currently_required_labels()
+            pending_data = {client:None for client, labels in room.algorithm_state.user_provided_labels.items() if set(required_labels).issubset(labels)}
+            assert len(pending_data) > 0, f'There are no clients who can supply the labels: {required_labels}'
+            room.algorithm_state.pending_data = pending_data
 
 
         return Response(

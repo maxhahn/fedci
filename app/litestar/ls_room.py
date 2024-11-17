@@ -3,6 +3,7 @@ from litestar import get, post, MediaType, Response
 from litestar.exceptions import HTTPException
 import pickle
 import base64
+from typing import Optional
 
 from ls_data_structures import (
     RoomDTO, RoomDetailsDTO,
@@ -66,9 +67,18 @@ class RoomController(Controller):
 
         selected_algorithm = Algorithm(data.algorithm)
         if selected_algorithm == Algorithm.FEDERATED_GLM:
-            algorithm_state = None
+            algorithm_state = FEDGLMState(
+                user_provided_labels = {room_owner: connections[data.id].provided_data.data_labels},
+                schema = None,
+                categorical_expressions = None,
+                ordinal_expressions = None,
+                testing_engine = None,
+                pending_data = None,
+                start_of_last_iteration = None,
+
+            )
         elif selected_algorithm == Algorithm.P_VALUE_AGGREGATION:
-            algorithm_state= RIODState(
+            algorithm_state = RIODState(
                 user_provided_labels={room_owner: connections[data.id].provided_data.data_labels}
             )
         else:

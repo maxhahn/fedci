@@ -3,6 +3,7 @@ import datetime
 import json
 import numpy as np
 import base64
+from typing import Optional
 
 def validate_user_request(id: str, username: str):
     if id not in connections:
