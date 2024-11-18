@@ -69,9 +69,9 @@ class RoomController(Controller):
         if selected_algorithm == Algorithm.FEDERATED_GLM:
             algorithm_state = FEDGLMState(
                 user_provided_labels = {room_owner: connections[data.id].provided_data.data_labels},
-                schema = None,
-                categorical_expressions = None,
-                ordinal_expressions = None,
+                user_provided_schema = {room_owner: connections[data.id].provided_data.schema},
+                user_provided_categorical_expressions = {room_owner: connections[data.id].provided_data.categorical_expressions},
+                user_provided_ordinal_expressions = {room_owner: connections[data.id].provided_data.ordinal_expressions},
                 testing_engine = None,
                 pending_data = None,
                 start_of_last_iteration = None,
@@ -134,6 +134,7 @@ class RoomController(Controller):
             room.algorithm_state.user_provided_categorical_expressions[data.username] = connections[data.id].provided_data.categorical_expressions
             room.algorithm_state.user_provided_ordinal_expressions[data.username] = connections[data.id].provided_data.ordinal_expressions
             room.algorithm_state.user_provided_labels[data.username] = connections[data.id].provided_data.data_labels
+            room.algorithm_state.user_provided_schema[data.username] = connections[data.id].provided_data.data_labels
         elif room.algorithm == Algorithm.P_VALUE_AGGREGATION:
             room.algorithm_state.user_provided_labels[data.username] = connections[data.id].provided_data.data_labels
         else:

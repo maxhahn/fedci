@@ -665,15 +665,16 @@ def provide_fedglm_data(room, fedglm_status):
 def step_show_room_details():
     room = st.session_state['current_room']
     if room['is_processing']:
-        st.write(f"## Room: {st.session_state['current_room']['name']} <sup>(in progress)</sup>", unsafe_allow_html=True)
+        st.write(f"## Room: {room['name']} <sup>(in progress)</sup>", unsafe_allow_html=True)
     elif room['is_finished']:
-        st.write(f"## Room: {st.session_state['current_room']['name']} <sup>(finished)</sup>", unsafe_allow_html=True)
+        st.write(f"## Room: {room['name']} <sup>(finished)</sup>", unsafe_allow_html=True)
         st.session_state['do_autorefresh'] = False
     else:
-        st.write(f"## Room: {st.session_state['current_room']['name']} <sup>({'hidden' if room['is_hidden'] else 'public'}) ({'locked' if room['is_locked'] else 'open'}) {'(protected)' if room['is_protected'] else ''}</sup>", unsafe_allow_html=True)
+        st.write(f"## Room: {room['name']} <sup>({'hidden' if room['is_hidden'] else 'public'}) ({'locked' if room['is_locked'] else 'open'}) {'(protected)' if room['is_protected'] else ''}</sup>", unsafe_allow_html=True)
 
-    st.write(f"<sup>Room protocol: {st.session_state['current_room']['algorithm']}<sup>", unsafe_allow_html=True)
-
+    st.write(f"<sup>Room protocol: {room['algorithm']}<sup>", unsafe_allow_html=True)
+    if room['algorithm'] == 'FEDGLM' and room['is_processing']:
+        st.write(f"<sup>Currently running: {room['algorithm_info']['y_label']} ~ {','.join(room['algorithm_info']['X_labels'] + ['1'])}<sup>", unsafe_allow_html=True)
     #spinner_placeholder = st.empty()
 
     _, col1, col2, col3, col4, col5, _ = st.columns((1,1,1,1,1,1,1))

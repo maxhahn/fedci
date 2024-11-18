@@ -55,10 +55,10 @@ class FEDGLMUpdateData:
 
 @dataclass
 class FEDGLMState:
-    schema: Dict[str, Dict[str, fedci.VariableType]]
+    user_provided_schema: Dict[str, Dict[str, fedci.VariableType]]
     user_provided_labels: Dict[str, List[str]]
-    categorical_expressions: Dict[str, Dict[str, List[str]]]
-    ordinal_expressions: Dict[str, Dict[str, List[str]]]
+    user_provided_categorical_expressions: Dict[str, Dict[str, List[str]]]
+    user_provided_ordinal_expressions: Dict[str, Dict[str, List[str]]]
     testing_engine: fedci.TestEngine
     pending_data: Dict[str, FEDGLMUpdateData]
     start_of_last_iteration: datetime.datetime

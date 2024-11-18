@@ -85,22 +85,15 @@ class AlgorithmController(Controller):
             ordinal_expressions=ordinal_expressions
         )
 
-        room.algorithm_state = FEDGLMState(
-            schema=schema,
-            user_provided_labels=room.algorithm_state.user_provided_labels,
-            categorical_expressions=category_expressions,
-            ordinal_expressions=ordinal_expressions if fedci.EXPAND_ORDINALS else None,
-            testing_engine=testing_engine,
-            pending_data=None,
-            start_of_last_iteration=datetime.datetime.now()
-        )
+        room.algorithm_state.testing_engine = testing_engine
+        room.algorithm_state.start_of_last_iteration=datetime.datetime.now()
 
         required_labels = testing_engine.get_currently_required_labels()
 
         pending_data = {client:None for client, labels in room.algorithm_state.user_provided_labels.items() if set(required_labels).issubset(labels)}
         assert len(pending_data) > 0, f'There are no clients who can supply the labels: {required_labels}'
+        # TODO: consider making a pending_data queue, so that fast clients can process their data early. But slowness still remains... weakest link
         room.algorithm_state.pending_data = pending_data
-
 
         rooms[room_name] = room
         return
