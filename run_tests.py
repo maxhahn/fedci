@@ -139,15 +139,15 @@ node_collections = [
 
 num_samples = [
     100,
-    200, 300, 400,
+    #200, 300, 400,
     500, #600, 700, 800,
-    750,
+    #750,
     #900,
     1000,
     #1250,
     #1500,
     #1750,
-    2000,
+    #2000,
     #2500,
     3000
 ]
@@ -155,12 +155,12 @@ num_clients = [
     1, 3, 5
 ]
 
-file_info = ('./experiments/r1', 'tests.ndjson')
+file_info = ('./experiments/r2', 'tests.ndjson')
 
 configurations = list(itertools.product(node_collections, num_samples, num_clients))
 configurations = [c + file_info for c in configurations]
 
-num_runs = 50
+num_runs = 10
 
 configurations *= num_runs
 #random.shuffle(configurations)

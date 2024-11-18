@@ -26,7 +26,10 @@ class RegressionTest():
         except np.linalg.LinAlgError:
             xwx_inv = np.linalg.pinv(xwx)
 
-        self.beta = xwx_inv @ xwz
+        if LASSO > 0:
+            self.beta = (xwx_inv @ xwz) + LASSO * xwx_inv @ self.beta
+        else:
+            self.beta = xwx_inv @ xwz
 
     def __lt__(self, other):
         if len(self.X_labels) < len(other.X_labels): return True
