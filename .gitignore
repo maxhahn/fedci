@@ -10,3 +10,4 @@
 .devpod-internal
 .zed_server
 images/*
+experiments/*

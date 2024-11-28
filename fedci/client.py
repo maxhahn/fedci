@@ -4,7 +4,7 @@ import numpy as np
 
 from typing import Dict, List
 
-from .env import DEBUG, EXPAND_ORDINALS, LASSO, LR
+from .env import DEBUG, EXPAND_ORDINALS, RIDGE, LR
 
 import statsmodels.api as sm
 from statsmodels.genmod.generalized_linear_model import GLMResults

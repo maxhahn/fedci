@@ -5,7 +5,8 @@ from tqdm.contrib.concurrent import process_map
 import itertools
 import random
 
-# Run with: EXPAND_ORDINALS=1 LR=0.4 LASSO=0.01 python3 run_tests.py
+# Run with: EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.01 python3 run_tests.py
+# EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.02 python3 run_tests.py
 
 # Setup Data
 # ## L-B CASE
@@ -139,15 +140,15 @@ node_collections = [
 
 num_samples = [
     100,
-    #200, 300, 400,
+    200, 300, 400,
     500, #600, 700, 800,
-    #750,
+    750,
     #900,
     1000,
     #1250,
     #1500,
     #1750,
-    #2000,
+    2000,
     #2500,
     3000
 ]
@@ -155,15 +156,14 @@ num_clients = [
     1, 3, 5
 ]
 
-file_info = ('./experiments/r2', 'tests.ndjson')
+file_info = ('./experiments/r5', 'tests.ndjson')
 
 configurations = list(itertools.product(node_collections, num_samples, num_clients))
 configurations = [c + file_info for c in configurations]
 
-num_runs = 10
+num_runs = 50
 
 configurations *= num_runs
-#random.shuffle(configurations)
 
 # Run tests
 process_map(run_configured_test, configurations, max_workers=5, chunksize=10)

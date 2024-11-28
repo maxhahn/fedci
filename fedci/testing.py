@@ -3,7 +3,7 @@ import numpy as np
 from typing import List, Dict
 from itertools import chain, combinations
 
-from .env import EXPAND_ORDINALS, LASSO
+from .env import EXPAND_ORDINALS, RIDGE
 from .utils import BetaUpdateData, ClientResponseData, VariableType
 
 class RegressionTest():
@@ -16,9 +16,9 @@ class RegressionTest():
         xwx = sum([d.xwx for d in data])
         xwz = sum([d.xwz for d in data])
 
-        if LASSO > 0:
-            penalty_matrix = LASSO * np.eye(len(xwx))
-            penalty_matrix[-1, -1] = 0  # Don't penalize intercept
+        if RIDGE > 0:
+            penalty_matrix = RIDGE * np.eye(len(xwx))
+            #penalty_matrix[-1, -1] = 0  # Don't penalize intercept
             xwx += penalty_matrix
 
         try:
@@ -26,8 +26,8 @@ class RegressionTest():
         except np.linalg.LinAlgError:
             xwx_inv = np.linalg.pinv(xwx)
 
-        if LASSO > 0:
-            self.beta = (xwx_inv @ xwz) + LASSO * xwx_inv @ self.beta
+        if RIDGE > 0:
+            self.beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
         else:
             self.beta = xwx_inv @ xwz
 

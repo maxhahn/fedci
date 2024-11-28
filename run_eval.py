@@ -7,7 +7,7 @@ import glob
 
 # %%
 # Load data
-path =  './experiments/r2/*ndjson'
+path =  './experiments/r5/*ndjson'
 try:
     df = pl.read_ndjson(path, ignore_errors=True)
 except:
@@ -53,12 +53,25 @@ hvplot.save(plot, 'images/p_value_scatter.html')
 
 # Plot correlation of p values
 _df = df
-df_correlation_fix = _df.with_columns(correct=(pl.col('predicted_p_values') - pl.col('true_p_values')).round(8) == 0)
-df_correlation_fix = df_correlation_fix.group_by(['name', 'num_clients', 'num_samples']).agg(pl.min('correct'))
+
+df_correlation_fix = df.with_columns(correct=(pl.col('predicted_p_values') - pl.col('true_p_values')).round(8) == 0)
+df_correlation_fix = df_correlation_fix.group_by(['name', 'num_clients', 'num_samples']).agg(pl.all('correct'))
 df_correlation_fix = df_correlation_fix.filter(pl.col('correct')).drop('correct')
 df_correlation_fix = df_correlation_fix.with_columns(correlation_fix=pl.lit(1.0))
 
-df_correlation_fix2 = _df
+df_correlation_fix2 = df.with_columns(
+    pl.n_unique('predicted_p_values', 'true_p_values').over('name', 'num_clients', 'num_samples').name.suffix('_nunique')
+)
+df_correlation_fix2 = df_correlation_fix2.filter((pl.col('predicted_p_values_nunique') == 1) | (pl.col('true_p_values_nunique') == 1))
+df_correlation_fix2 = df_correlation_fix2.drop('predicted_p_values_nunique', 'true_p_values_nunique')
+df_correlation_fix2 = df_correlation_fix2.group_by('name', 'num_clients', 'num_samples').agg(
+    mean_correctness=(pl.col('predicted_p_values')==pl.col('true_p_values')).mean(),
+    mean_difference_p_value=(pl.col('predicted_p_values').mean()-pl.col('true_p_values').mean()).abs()
+)
+df_correlation_fix2 = df_correlation_fix2.with_columns(
+    correlation_fix=((pl.col('mean_difference_p_value') < 1e-4) & (pl.col('mean_correctness') > 0.9)).cast(pl.Float64)
+)
+df_correlation_fix2 = df_correlation_fix2.drop('mean_difference_p_value', 'mean_correctness')
 
 _df = _df.group_by(
     'name', 'experiment_type', 'conditioning_type', 'num_clients', 'num_samples'
@@ -66,27 +79,19 @@ _df = _df.group_by(
     p_value_correlation=pl.corr('predicted_p_values', 'true_p_values')
 )
 
+_df = _df.with_columns(pl.col('p_value_correlation').fill_nan(None))
 _df = _df.join(df_correlation_fix, on=['name', 'num_clients', 'num_samples'], how='left')
-_df = _df.with_columns(pl.col('p_value_correlation').replace_strict({float('NaN'): None}, default=pl.col('p_value_correlation')))
 _df = _df.with_columns(pl.coalesce(['p_value_correlation', 'correlation_fix'])).drop('correlation_fix')
-_df = _df.with_columns(pl.col('p_value_correlation').replace_strict({float('NaN'): None}, default=pl.col('p_value_correlation')))
 
-if _df['p_value_correlation'].null_count() > 0:
-    df_correlation_fix2 = df_correlation_fix2.join(_df.filter(pl.col('p_value_correlation').is_null()), on=['name', 'num_clients', 'num_samples'], how='semi')
-    df_correlation_fix2 = df_correlation_fix2.unpivot(['predicted_p_values', 'true_p_values'], index=['name', 'num_clients', 'num_samples'])
-    df_correlation_fix2 = df_correlation_fix2.group_by(['name', 'num_clients', 'num_samples', 'value', 'variable']).len()
-    df_correlation_fix2 = df_correlation_fix2.pivot('variable', values='len').fill_null(pl.lit(0)).drop('value')
-    df_correlation_fix2 = df_correlation_fix2.rename({'predicted_p_values': 'predicted', 'true_p_values': 'true'})
-    df_correlation_fix2 = df_correlation_fix2.with_columns(
-        min_col=pl.min_horizontal(pl.col('predicted', 'true')),
-        max_col=pl.max_horizontal(pl.col('predicted', 'true'))
-    )
-    df_correlation_fix2 = df_correlation_fix2.group_by(['name', 'num_clients', 'num_samples']).agg(correlation_fix=pl.sum('min_col')/pl.sum('max_col'))
+#dfx = _df.filter(pl.col('p_value_correlation').is_null())
 
-    _df = _df.join(df_correlation_fix2, on=['name', 'num_clients', 'num_samples'], how='left')
-    _df = _df.with_columns(pl.coalesce(['p_value_correlation', 'correlation_fix'])).drop('correlation_fix')
-    _df = _df.with_columns(pl.col('p_value_correlation').replace_strict({float('NaN'): None}, default=pl.col('p_value_correlation')))
+_df = _df.with_columns(pl.col('p_value_correlation').fill_nan(None))
+_df = _df.join(df_correlation_fix2, on=['name', 'num_clients', 'num_samples'], how='left')
+_df = _df.with_columns(pl.coalesce(['p_value_correlation', 'correlation_fix'])).drop('correlation_fix')
 
+_df = _df.with_columns(pl.col('p_value_correlation').fill_nan(None))
+
+#print(_df.join(dfx, on=['name', 'num_clients', 'num_samples'], how='semi'))
 assert _df['p_value_correlation'].null_count() == 0, 'NaN in correlations'
 
 plot = _df.sort('num_samples').hvplot.line(x='num_samples',

@@ -12,7 +12,7 @@ from dgp import NodeCollection
 from .server import Server
 from .client import Client
 from .evaluation import get_symmetric_likelihood_tests, get_riod_tests, compare_tests_to_truth
-from .env import DEBUG, EXPAND_ORDINALS, LOG_R, SEEDED, LR, LASSO
+from .env import DEBUG, EXPAND_ORDINALS, LOG_R, SEEDED, LR, RIDGE
 
 import rpy2.rinterface_lib.callbacks as cb
 
@@ -109,7 +109,7 @@ def run_test_on_data(data,
         'max_regressors': max_regressors,
         'expanded_ordinals': True if EXPAND_ORDINALS == 1 else False,
         'lr': LR,
-        'lasso': LASSO,
+        'ridge': RIDGE,
         'seed': seed,
         'predicted_p_values': predicted_p_values,
         'true_p_values': true_p_values

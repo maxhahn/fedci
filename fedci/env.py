@@ -5,4 +5,4 @@ SEEDED = 0 if (v:=os.getenv("SEEDED")) is None else int(v)
 
 EXPAND_ORDINALS = 0 if (v:=os.getenv("EXPAND_ORDINALS")) is None else int(v)
 LR = 1 if (v:=os.getenv("LR")) is None else float(v)
-LASSO = 0 if (v:=os.getenv("LASSO")) is None else float(v)
+RIDGE = 0 if (v:=os.getenv("RIDGE")) is None else float(v)
