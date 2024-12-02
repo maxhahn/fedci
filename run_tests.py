@@ -221,6 +221,9 @@ file_info = ('./experiments/n1', 'tests.ndjson')
 
 configurations = list(itertools.product(node_collections, num_samples, num_clients))
 configurations = [c + file_info for c in configurations]
+test_targets_uncon = [('X', 'Y', ())]
+test_targets_con = [('X', 'Y', ('Z',))]
+configurations = [c + (test_targets_uncon,) if len(c[0].nodes) == 2 else c + (test_targets_con,) for c in configurations]
 
 num_runs = 50
 

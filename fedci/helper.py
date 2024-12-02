@@ -35,8 +35,8 @@ def write_result(result, directory, file):
         f.write(json.dumps(result) + '\n')
         fcntl.flock(f, fcntl.LOCK_UN)
 
-def run_configured_test(config, seed=None, test_targets=None):
-    node_collection, num_samples, num_clients, target_directory, target_file = config
+def run_configured_test(config, seed=None):
+    node_collection, num_samples, num_clients, target_directory, target_file, test_targets = config
     if not os.path.exists(target_directory) and not (DEBUG >= 1):
         os.makedirs(target_directory, exist_ok=True)
     target_file = f'{os.getpid()}-{target_file}'
