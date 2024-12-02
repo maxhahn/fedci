@@ -7,6 +7,7 @@ import random
 
 # Run with:
 # EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.02 python3 run_tests.py
+# EXPAND_ORDINALS=1 python3 run_tests.py
 
 # Setup Data
 # ## L-B CASE
@@ -43,21 +44,21 @@ nc916 = dgp.NodeCollection('C-B Unc. Conf. Dep. : X (<- Z ->) Y', [node1, node2,
 # Unc. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.CategoricalNode], min_categories=3)
-nc921 = dgp.NodeCollection('C-M Unc. Indep.', [node1, node2])
+nc921 = dgp.NodeCollection('C-M Unc. Indep. : X Y', [node1, node2])
 # Unc. Dep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.CategoricalNode], parents=[node1], min_categories=3)
-nc922 = dgp.NodeCollection('C-M Unc. Dep.', [node1, node2])
+nc922 = dgp.NodeCollection('C-M Unc. Dep. : X -> Y', [node1, node2])
 # Con. Dep. Case given Z
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.CategoricalNode], min_categories=3)
 node3 = dgp.GenericNode('Z', parents=[node1, node2], node_restrictions=[dgp.Node])
-nc923 = dgp.NodeCollection('C-M Con. Dep.', [node1, node2, node3])
+nc923 = dgp.NodeCollection('C-M Con. Dep. : X -> Z <- Y', [node1, node2, node3])
 # Con. Indep. Case given Z
 node1 = dgp.GenericNode('Z', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('X', parents=[node1], node_restrictions=[dgp.Node])
 node3 = dgp.GenericNode('Y', parents=[node1], node_restrictions=[dgp.CategoricalNode], min_categories=3)
-nc924 = dgp.NodeCollection('C-M Con. Indep.', [node1, node2, node3])
+nc924 = dgp.NodeCollection('C-M Con. Indep. : X <- Z -> Y', [node1, node2, node3])
 # Unc. Conf. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.CategoricalNode], min_categories=3)
@@ -73,21 +74,21 @@ nc926 = dgp.NodeCollection('C-M Unc. Conf. Dep. : X (<- Z ->) Y', [node1, node2,
 # Unc. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
-nc931 = dgp.NodeCollection('C-O Unc. Indep.', [node1, node2])
+nc931 = dgp.NodeCollection('C-O Unc. Indep. : X Y', [node1, node2])
 # Unc. Dep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], parents=[node1], min_categories=3)
-nc932 = dgp.NodeCollection('C-O Unc. Dep.', [node1, node2])
+nc932 = dgp.NodeCollection('C-O Unc. Dep. : X -> Y', [node1, node2])
 # Con. Dep. Case given Z
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
 node3 = dgp.GenericNode('Z', parents=[node1, node2], node_restrictions=[dgp.Node])
-nc933 = dgp.NodeCollection('C-O Con. Dep.', [node1, node2, node3])
+nc933 = dgp.NodeCollection('C-O Con. Dep. : X -> Z <- Y', [node1, node2, node3])
 # Con. Indep. Case given Z
 node1 = dgp.GenericNode('Z', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('X', parents=[node1], node_restrictions=[dgp.Node])
 node3 = dgp.GenericNode('Y', parents=[node1], node_restrictions=[dgp.OrdinalNode], min_categories=3)
-nc934 = dgp.NodeCollection('C-O Con. Indep.', [node1, node2, node3])
+nc934 = dgp.NodeCollection('C-O Con. Indep. : X <- Z -> Y', [node1, node2, node3])
 # Unc. Conf. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
@@ -103,21 +104,21 @@ nc936 = dgp.NodeCollection('C-O Unc. Conf. Dep. : X (<- Z ->) Y', [node1, node2,
 # Unc. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.BinaryNode])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
-nc941 = dgp.NodeCollection('B-O Unc. Indep.', [node1, node2])
+nc941 = dgp.NodeCollection('B-O Unc. Indep. : X Y', [node1, node2])
 # Unc. Dep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.BinaryNode])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], parents=[node1], min_categories=3)
-nc942 = dgp.NodeCollection('B-O Unc. Dep.', [node1, node2])
+nc942 = dgp.NodeCollection('B-O Unc. Dep. : X -> Y', [node1, node2])
 # Con. Dep. Case given Z
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.BinaryNode])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
 node3 = dgp.GenericNode('Z', parents=[node1, node2], node_restrictions=[dgp.Node])
-nc943 = dgp.NodeCollection('B-O Con. Dep.', [node1, node2, node3])
+nc943 = dgp.NodeCollection('B-O Con. Dep. : X -> Z <- Y', [node1, node2, node3])
 # Con. Indep. Case given Z
 node1 = dgp.GenericNode('Z', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('X', parents=[node1], node_restrictions=[dgp.BinaryNode])
 node3 = dgp.GenericNode('Y', parents=[node1], node_restrictions=[dgp.OrdinalNode], min_categories=3)
-nc944 = dgp.NodeCollection('B-O Con. Indep.', [node1, node2, node3])
+nc944 = dgp.NodeCollection('B-O Con. Indep. : X <- Z -> Y', [node1, node2, node3])
 # Unc. Conf. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.BinaryNode])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
@@ -133,21 +134,21 @@ nc946 = dgp.NodeCollection('B-O Unc. Conf. Dep. : X (<- Z ->) Y', [node1, node2,
 # Unc. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.CategoricalNode], min_categories=3)
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
-nc951 = dgp.NodeCollection('M-O Unc. Indep.', [node1, node2])
+nc951 = dgp.NodeCollection('M-O Unc. Indep. : X Y', [node1, node2])
 # Unc. Dep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.CategoricalNode], min_categories=3)
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], parents=[node1], min_categories=3)
-nc952 = dgp.NodeCollection('M-O Unc. Dep.', [node1, node2])
+nc952 = dgp.NodeCollection('M-O Unc. Dep. : X -> Y', [node1, node2])
 # Con. Dep. Case given Z
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.CategoricalNode], min_categories=3)
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
 node3 = dgp.GenericNode('Z', parents=[node1, node2], node_restrictions=[dgp.Node])
-nc953 = dgp.NodeCollection('M-O Con. Dep.', [node1, node2, node3])
+nc953 = dgp.NodeCollection('M-O Con. Dep. : X -> Z <- Y', [node1, node2, node3])
 # Con. Indep. Case given Z
 node1 = dgp.GenericNode('Z', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('X', parents=[node1], node_restrictions=[dgp.CategoricalNode], min_categories=3)
 node3 = dgp.GenericNode('Y', parents=[node1], node_restrictions=[dgp.OrdinalNode], min_categories=3)
-nc954 = dgp.NodeCollection('M-O Con. Indep.', [node1, node2, node3])
+nc954 = dgp.NodeCollection('M-O Con. Indep. : X <- Z -> Y', [node1, node2, node3])
 # Unc. Conf. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.CategoricalNode], min_categories=3)
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.OrdinalNode], min_categories=3)
@@ -163,21 +164,21 @@ nc956 = dgp.NodeCollection('M-O Unc. Conf. Dep. : X (<- Z ->) Y', [node1, node2,
 # Unc. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.Node])
-nc961 = dgp.NodeCollection('C-C Unc. Indep.', [node1, node2])
+nc961 = dgp.NodeCollection('C-C Unc. Indep. : X Y', [node1, node2])
 # Unc. Dep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.Node], parents=[node1])
-nc962 = dgp.NodeCollection('C-C Unc. Dep.', [node1, node2])
+nc962 = dgp.NodeCollection('C-C Unc. Dep. : X -> Y', [node1, node2])
 # Con. Dep. Case given Z
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.Node])
 node3 = dgp.GenericNode('Z', parents=[node1, node2], node_restrictions=[dgp.Node])
-nc963 = dgp.NodeCollection('C-C Con. Dep.', [node1, node2, node3])
+nc963 = dgp.NodeCollection('C-C Con. Dep. : X -> Z <- Y', [node1, node2, node3])
 # Con. Indep. Case given Z
 node1 = dgp.GenericNode('Z', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('X', parents=[node1], node_restrictions=[dgp.Node])
 node3 = dgp.GenericNode('Y', parents=[node1], node_restrictions=[dgp.Node])
-nc964 = dgp.NodeCollection('C-C Con. Indep.', [node1, node2, node3])
+nc964 = dgp.NodeCollection('C-C Con. Indep. : X <- Z -> Y', [node1, node2, node3])
 # Unc. Conf. Indep. Case
 node1 = dgp.GenericNode('X', node_restrictions=[dgp.Node])
 node2 = dgp.GenericNode('Y', node_restrictions=[dgp.Node])
@@ -217,19 +218,19 @@ num_clients = [
     1, 3, 5
 ]
 
-file_info = ('./experiments/n1', 'tests.ndjson')
+file_info = ('./experiments/n2', 'tests.ndjson')
 
 configurations = list(itertools.product(node_collections, num_samples, num_clients))
 configurations = [c + file_info for c in configurations]
 test_targets_uncon = [('X', 'Y', ())]
 test_targets_con = [('X', 'Y', ('Z',))]
-configurations = [c + (test_targets_uncon,) if len(c[0].nodes) == 2 else c + (test_targets_con,) for c in configurations]
+configurations = [c + (test_targets_uncon,) if 'Unc.' in c[0].name else c + (test_targets_con,) for c in configurations]
 
 num_runs = 50
 
 configurations *= num_runs
 
 # Run tests
-process_map(run_configured_test, configurations, max_workers=5, chunksize=10)
+process_map(run_configured_test, configurations, max_workers=4, chunksize=10)
 #for i, configuration in enumerate(tqdm(configurations)):
 #    run_configured_test(configuration)

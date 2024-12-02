@@ -6,7 +6,7 @@ import itertools
 import random
 
 # Run with:
-# EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.02 python3 run_tests.py
+# EXPAND_ORDINALS=1 python3 test.py
 
 # Setup Data
 # ## L-B CASE
@@ -202,7 +202,7 @@ node_collections = [
 
 num_samples = [
     #100,
-    200, #300, 400,
+    100, #300, 400,
     #500, #600, 700, 800,
     #750,
     #900,
@@ -227,8 +227,19 @@ num_runs = 1
 
 configurations *= num_runs
 
-bad_seeds = [2]
-
-#run_configured_test(configurations[0], seed=31, test_targets=[('X', 'Y', ('Z',))])
-for i in range(1000):
-    run_configured_test(configurations[0], seed=i+20, test_targets=[('X', 'Y', ('Z',))])
+bad_seeds = []
+#(p1: 0.526709 and p2: 0.6335279)
+run_configured_test(configurations[0] + ([('X', 'Y', ('Z',))],), seed=405)
+#for i in range(1000):
+#    run_configured_test(configurations[0] + ([('X', 'Y', ('Z',))],), seed=i+400)
+# import polars as pl
+# data = pl.read_parquet('error-data-01-booled.parquet')
+# run_test_on_data(data,
+#                 'test',
+#                 1,
+#                 '',
+#                 '',
+#                 None,
+#                 seed=None,
+#                 test_targets=[('X', 'Y', ('Z',))]
+#                 )

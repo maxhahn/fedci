@@ -15,6 +15,7 @@ class ComputationHelper():
     def get_regression_model(y, X, beta, glm_family):
         model = sm.GLM(y, X, family=glm_family)
         result = GLMResults(model, beta, normalized_cov_params=None, scale=None)
+        #result = GLMResults(model, beta, normalized_cov_params=None, scale=model.estimate_scale(result.predict()))
         return result
 
     @staticmethod
@@ -36,7 +37,8 @@ class ComputationHelper():
         z = eta + LR*(y - mu)/dmu_deta
 
         if type(model.family) == family.Gaussian:
-            var_y = np.var(y)
+            #var_y = model.scale
+            var_y = np.var(model.resid_response)
         elif type(model.family) == family.Binomial:
             var_y = dmu_deta
         else:
@@ -135,7 +137,7 @@ class CategoricalComputationUnit(ComputationUnit):
 
             z = etas[category] + (y - mus[category])/dmu_deta[category]
 
-            W = np.diag((dmu_deta[category]**2)/np.nanmax([np.var(mus[category]), 1e-4]))
+            W = np.diag(dmu_deta[category]) # dmu_deta**2/dmu_deta since it is binomial
 
             xw = X.T @ W
             xwx = xw @ X
