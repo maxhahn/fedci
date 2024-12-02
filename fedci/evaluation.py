@@ -136,12 +136,14 @@ def get_likelihood_tests(tests: List[Test]):
             likelihood_tests.append(LikelihoodRatioTest(nested_test[0], test))
     return likelihood_tests
 
-def get_symmetric_likelihood_tests(tests):
+def get_symmetric_likelihood_tests(tests, test_targets):
     symmetric_tests = []
     asymmetric_tests = get_likelihood_tests(tests)
-    unique_tests = [t for t in asymmetric_tests if t.y_label < t.x_label]
+    unique_tests = [t for t in asymmetric_tests if t.x_label < t.y_label]
 
     for test in unique_tests:
+        if test_targets is not None and (test.x_label, test.y_label, tuple(sorted(test.s_labels))) not in test_targets:
+            continue
         test_counterpart = [t for t in asymmetric_tests if (t.y_label == test.x_label) and (t.x_label == test.y_label) and (t.s_labels == test.s_labels)]
         if len(test_counterpart) == 0:
             continue
@@ -172,7 +174,7 @@ def _transform_dataframe(df):
     r_dataframe = base.as_data_frame(r_list)
     return r_dataframe
 
-def get_riod_tests(data, max_regressors=None):
+def get_riod_tests(data, max_regressors=None, test_targets=None):
     if max_regressors is None:
         max_regressors = 999
 
@@ -206,9 +208,12 @@ def get_riod_tests(data, max_regressors=None):
         pval = row[3]
         ground_truth_tests.append(EmptyLikelihoodRatioTest(x, y, s, pval))
 
+    if test_targets is not None:
+        ground_truth_tests = [t for t in ground_truth_tests if (t.v0, t.v1, tuple(sorted(t.conditioning_set))) in test_targets]
+
     return ground_truth_tests
 
-def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_truth_tests: List[SymmetricLikelihoodRatioTest]):
+def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_truth_tests: List[SymmetricLikelihoodRatioTest], test_targets):
     assert len(tests) == len(ground_truth_tests), f'Number of tests do not match: {len(tests)} != {len(ground_truth_tests)}'
 
     p_values = []
@@ -221,4 +226,5 @@ def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_tru
             print('---')
             print(f'Prediction:\n{test}')
         p_values.append((test.p_val, gt_test.p_val))
+    assert len(p_values) > 0, 'No tests left'
     return [p_vals[0] for p_vals in p_values], [p_vals[1] for p_vals in p_values]

@@ -5,7 +5,7 @@ from tqdm.contrib.concurrent import process_map
 import itertools
 import random
 
-# Run with: EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.01 python3 run_tests.py
+# Run with:
 # EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.02 python3 run_tests.py
 
 # Setup Data
@@ -191,30 +191,31 @@ nc966 = dgp.NodeCollection('C-C Unc. Conf. Dep. : X (<- Z ->) Y', [node1, node2,
 
 # Setup Configs
 node_collections = [
-    nc911, nc912, nc913, nc914, nc915, nc916,
-    nc921, nc922, nc923, nc924, nc925, nc926,
-    nc931, nc932, nc933, nc934, nc935, nc936,
-    nc941, nc942, nc943, nc944, nc945, nc946,
-    nc951, nc952, nc953, nc954, nc955, nc956,
-    nc961, nc962, nc963, nc964, nc965, nc966,
+    #nc911, nc912, nc913, nc914, nc915, nc916,
+    #nc921, nc922, nc923, nc924, nc925, nc926,
+    #nc931, nc932, nc933, nc934, nc935, nc936,
+    #nc941, nc942, nc943, nc944, nc945, nc946,
+    #nc951, nc952, nc953, nc954, nc955, nc956,
+    nc953
+    #nc961, nc962, nc963, nc964, nc965, nc966,
 ]
 
 num_samples = [
-    100,
-    200, 300, 400,
-    500, #600, 700, 800,
-    750,
+    #100,
+    200, #300, 400,
+    #500, #600, 700, 800,
+    #750,
     #900,
-    1000,
+    #1000,
     #1250,
     #1500,
     #1750,
-    2000,
+    #2000,
     #2500,
-    3000
+    #3000
 ]
 num_clients = [
-    1, 3, 5
+    1, #3, 5
 ]
 
 file_info = ('./experiments/r5', 'tests.ndjson')
@@ -222,11 +223,12 @@ file_info = ('./experiments/r5', 'tests.ndjson')
 configurations = list(itertools.product(node_collections, num_samples, num_clients))
 configurations = [c + file_info for c in configurations]
 
-num_runs = 50
+num_runs = 1
 
 configurations *= num_runs
 
-# Run tests
-process_map(run_configured_test, configurations, max_workers=5, chunksize=10)
-#for i, configuration in enumerate(tqdm(configurations)):
-#    run_configured_test(configuration)
+bad_seeds = [2]
+
+#run_configured_test(configurations[0], seed=31, test_targets=[('X', 'Y', ('Z',))])
+for i in range(1000):
+    run_configured_test(configurations[0], seed=i+20, test_targets=[('X', 'Y', ('Z',))])

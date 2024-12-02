@@ -56,7 +56,7 @@ class Node:
         return self
 
     def _calc(self, num_samples):
-        val = pl.Series(name=self.name, values=np.random.normal(0,1, num_samples))
+        val = pl.Series(name=self.name, values=np.random.normal(0,1,num_samples))
         if len(self.parents) == 0:
             return val
 
@@ -65,7 +65,7 @@ class Node:
             coefficients = uniform_sample()
             data = parent.get(num_samples)
             if data.dtype == pl.Utf8:
-                coeff_map = {cat: uniform_sample() for cat in data.unique().to_list()}
+                coeff_map = {cat: uniform_sample() for cat in sorted(data.unique().to_list())}
                 coefficients = data.replace_strict(coeff_map).rename('coeffs')
             val += data.cast(pl.Float64)*coefficients
 

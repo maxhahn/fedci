@@ -5,7 +5,7 @@ from tqdm.contrib.concurrent import process_map
 import itertools
 import random
 
-# Run with: EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.01 python3 run_tests.py
+# Run with:
 # EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.02 python3 run_tests.py
 
 # Setup Data

@@ -12,7 +12,7 @@ from dgp import NodeCollection
 from .server import Server
 from .client import Client
 from .evaluation import get_symmetric_likelihood_tests, get_riod_tests, compare_tests_to_truth
-from .env import DEBUG, EXPAND_ORDINALS, LOG_R, SEEDED, LR, RIDGE
+from .env import DEBUG, EXPAND_ORDINALS, LOG_R, LR, RIDGE
 
 import rpy2.rinterface_lib.callbacks as cb
 
@@ -35,11 +35,8 @@ def write_result(result, directory, file):
         f.write(json.dumps(result) + '\n')
         fcntl.flock(f, fcntl.LOCK_UN)
 
-def run_configured_test(config, seed=None):
+def run_configured_test(config, seed=None, test_targets=None):
     node_collection, num_samples, num_clients, target_directory, target_file = config
-    if seed is not None:
-        if DEBUG >= 1: print(f'Current seed: {seed}')
-        np.random.seed(seed)
     if not os.path.exists(target_directory) and not (DEBUG >= 1):
         os.makedirs(target_directory, exist_ok=True)
     target_file = f'{os.getpid()}-{target_file}'
@@ -47,7 +44,9 @@ def run_configured_test(config, seed=None):
                     num_samples=num_samples,
                     num_clients=num_clients,
                     target_directory=target_directory,
-                    target_file=target_file
+                    target_file=target_file,
+                    test_targets=test_targets,
+                    seed=seed
                     )
 
 def run_test(dgp_nodes: NodeCollection,
@@ -55,14 +54,23 @@ def run_test(dgp_nodes: NodeCollection,
              num_clients,
              target_directory,
              target_file,
-             max_regressors=None
+             max_regressors=None,
+             test_targets=None,
+             seed=None
              ):
-    if SEEDED >= 1:
-        seed = random.randrange(2**32)
-        np.random.seed(seed)
+    if seed is None:
+        seed = random.randrange(2**30)
+    if DEBUG >= 1: print(f'Current seed: {seed}')
+
+    random.seed(2*seed)
+    np.random.seed(seed)
+
     dgp_nodes = copy.deepcopy(dgp_nodes)
+
     dgp_nodes.reset()
     data = dgp_nodes.get(num_samples)
+
+    #data.write_parquet('error-data-01.parquet')
 
     return run_test_on_data(data,
                             dgp_nodes.name,
@@ -70,7 +78,8 @@ def run_test(dgp_nodes: NodeCollection,
                             target_directory,
                             target_file,
                             max_regressors,
-                            seed=None if SEEDED==0 else seed
+                            seed=seed,
+                            test_targets=test_targets
                             )
 
 def run_test_on_data(data,
@@ -79,7 +88,8 @@ def run_test_on_data(data,
                      target_directory,
                      target_file,
                      max_regressors=None,
-                     seed=None
+                     seed=None,
+                     test_targets=None
                      ):
     if DEBUG >= 1:
         print("*** Data schema")
@@ -93,14 +103,17 @@ def run_test_on_data(data,
     clients = {i:Client(chunk) for i, chunk in enumerate(partition_dataframe(data, num_clients))}
     server = Server(
         clients,
-        max_regressors=max_regressors
+        max_regressors=max_regressors,
+        test_targets=test_targets
         )
 
     server.run()
 
-    likelihood_ratio_tests = get_symmetric_likelihood_tests(server.get_tests())
-    ground_truth_tests = get_riod_tests(data, max_regressors=max_regressors)
-    predicted_p_values, true_p_values = compare_tests_to_truth(likelihood_ratio_tests, ground_truth_tests)
+    likelihood_ratio_tests = get_symmetric_likelihood_tests(server.get_tests(), test_targets=test_targets)
+    baseline_tests = get_riod_tests(data, max_regressors=max_regressors, test_targets=test_targets)
+    predicted_p_values, baseline_p_values = compare_tests_to_truth(likelihood_ratio_tests, baseline_tests, test_targets)
+
+    assert all([abs(a-b) < 0.3 for a,b in zip(predicted_p_values, baseline_p_values)]), 'Error'
 
     result = {
         'name': data_name,
@@ -112,10 +125,11 @@ def run_test_on_data(data,
         'ridge': RIDGE,
         'seed': seed,
         'predicted_p_values': predicted_p_values,
-        'true_p_values': true_p_values
+        'baseline_p_values': baseline_p_values,
+        'test_targets': test_targets
     }
 
     if DEBUG == 0:
         write_result(result, target_directory, target_file)
 
-    return list(zip(sorted(likelihood_ratio_tests), sorted(ground_truth_tests)))
+    return list(zip(sorted(likelihood_ratio_tests), sorted(baseline_tests)))

@@ -143,7 +143,8 @@ class TestEngine():
                  category_expressions,
                  ordinal_expressions,
                  max_regressors=None,
-                 max_iterations=25
+                 max_iterations=25,
+                 test_targets=None
                  ):
 
         self.tests = []
@@ -152,7 +153,11 @@ class TestEngine():
         variables = set(schema.keys())
         max_conditioning_set_size = min(len(variables)-1, max_regressors) if max_regressors is not None else len(variables)-1
 
+        all_test_targets = set(sum([(a,b) for a,b,_ in test_targets], ())) if test_targets is not None else None
+
         for y_var in variables:
+            if all_test_targets is not None and y_var not in all_test_targets:
+                continue
             set_of_possible_regressors = variables - {y_var}
             powerset_of_regressors = chain.from_iterable(combinations(set_of_possible_regressors, r) for r in range(0, max_conditioning_set_size+1))
 
