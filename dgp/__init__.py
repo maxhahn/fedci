@@ -139,13 +139,16 @@ class GenericNode(Node):
         return self.node.get(num_samples)
 
 class NodeCollection():
-    def __init__(self, name, nodes):
+    def __init__(self, name, nodes, drop_vars=[]):
         self.name = name
         self.nodes = toposort(nodes)
+        self.drop_vars = drop_vars
 
     def get(self, num_samples):
         data = [n.get(num_samples) for n in self.nodes[::-1]]
         data = pl.DataFrame(data)
+        if len(self.drop_vars) > 0:
+            data = data.drop(self.drop_vars)
         return data
 
     def reset(self):
