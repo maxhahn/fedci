@@ -6,7 +6,7 @@ from .env import DEBUG
 from typing import List, Dict
 
 class Server():
-    def __init__(self, clients: Dict[str, Client], max_regressors=None, test_targets=None):
+    def __init__(self, clients: Dict[str, Client], max_regressors=None, test_targets=None, max_iterations=25):
         self.clients = clients
         self.client_schemas = {}
         self.schema = {}
@@ -35,7 +35,7 @@ class Server():
             category_expressions=self.category_expressions,
             ordinal_expressions=self.ordinal_expressions,
             max_regressors=max_regressors,
-            max_iterations=25,
+            max_iterations=max_iterations,
             test_targets=test_targets
         )
 

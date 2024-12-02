@@ -18,7 +18,6 @@ class RegressionTest():
 
         if RIDGE > 0:
             penalty_matrix = RIDGE * np.eye(len(xwx))
-            #penalty_matrix[-1, -1] = 0  # Don't penalize intercept
             xwx += penalty_matrix
 
         try:

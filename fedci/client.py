@@ -34,7 +34,14 @@ class ComputationHelper():
         dmu_deta = derivative_inverse_link(eta)
 
         z = eta + LR*(y - mu)/dmu_deta
-        W = np.diag((dmu_deta**2)/np.nanmax([np.var(mu), 1e-4]))
+
+        if type(model.family) == family.Gaussian:
+            var_y = np.var(y)
+        elif type(model.family) == family.Binomial:
+            var_y = dmu_deta
+        else:
+            raise Exception(f'Cannot handle model family {model.family.__class__.__name__}')
+        W = np.diag((dmu_deta**2)/var_y)
 
         xw = X.T @ W
         xwx = xw @ X
@@ -85,13 +92,6 @@ class BinaryComputationUnit(ComputationUnit):
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
 
-        X = data.to_pandas()[sorted(X_labels)]
-        X['__const'] = 1
-        X = X.to_numpy().astype(float)
-
-        y = data.to_pandas()[y_label]
-        y = y.to_numpy().astype(float)
-
         return ComputationHelper.run_regression(
             y=y,
             X=X,
@@ -133,8 +133,8 @@ class CategoricalComputationUnit(ComputationUnit):
 
             reference_category_indices = reference_category_indices * (y==0)
 
-            # beta update
             z = etas[category] + (y - mus[category])/dmu_deta[category]
+
             W = np.diag((dmu_deta[category]**2)/np.nanmax([np.var(mus[category]), 1e-4]))
 
             xw = X.T @ W

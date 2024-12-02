@@ -217,7 +217,7 @@ num_clients = [
     1, 3, 5
 ]
 
-file_info = ('./experiments/r5', 'tests.ndjson')
+file_info = ('./experiments/n1', 'tests.ndjson')
 
 configurations = list(itertools.product(node_collections, num_samples, num_clients))
 configurations = [c + file_info for c in configurations]

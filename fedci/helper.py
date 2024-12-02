@@ -70,8 +70,6 @@ def run_test(dgp_nodes: NodeCollection,
     dgp_nodes.reset()
     data = dgp_nodes.get(num_samples)
 
-    #data.write_parquet('error-data-01.parquet')
-
     return run_test_on_data(data,
                             dgp_nodes.name,
                             num_clients,
@@ -104,7 +102,8 @@ def run_test_on_data(data,
     server = Server(
         clients,
         max_regressors=max_regressors,
-        test_targets=test_targets
+        test_targets=test_targets,
+        max_iterations=25
         )
 
     server.run()
