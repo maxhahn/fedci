@@ -36,7 +36,13 @@ class ComputationHelper():
         dmu_deta = derivative_inverse_link(eta)
 
         z = eta + LR*(y - mu)/dmu_deta
-        W = np.diag((dmu_deta**2)/np.nanmax([np.var(mu), 1e-4]))
+        if type(model.family) == family.Gaussian:
+            var_y = np.var(model.resid_response)
+        elif type(model.family) == family.Binomial:
+            var_y = dmu_deta
+        else:
+            raise Exception(f'Cannot handle model family {model.family.__class__.__name__}')
+        W = np.diag((dmu_deta**2)/var_y)
 
         xw = X.T @ W
         xwx = xw @ X
@@ -137,7 +143,7 @@ class CategoricalComputationUnit(ComputationUnit):
 
             # beta update
             z = etas[category] + (y - mus[category])/dmu_deta[category]
-            W = np.diag((dmu_deta[category]**2)/np.nanmax([np.var(mus[category]), 1e-4]))
+            W = np.diag(dmu_deta[category])
 
             xw = X.T @ W
             xwx = xw @ X
