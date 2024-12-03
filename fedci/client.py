@@ -121,30 +121,25 @@ class CategoricalComputationUnit(ComputationUnit):
             )
 
         etas = {c:np.clip(m.predict(which='linear'), -350, 350) for c,m in models.items()}
+        ref_mus = {c:np.clip(m.predict(), 1e-8, 1-1e-8) for c,m in models.items()}
         denom = 1 + sum(np.exp(eta) for eta in etas.values())
-        mus = {c:np.clip(np.exp(eta)/denom,1e-10,1-1e-10) for c,eta in etas.items()}
-        dmu_deta = {c:np.clip(mu*(1-mu), 1e-15, None) for c,mu in mus.items()}
+        mus = {c:np.clip(np.exp(eta)/denom, 1e-8, 1-1e-8) for c,eta in etas.items()}
 
         results = {}
         llf = 0
         llf_saturated = 0
         reference_category_indices = np.ones(len(data))
-        for category in dmu_deta.keys():
-            y = data.to_pandas()[category]
-            y = y.to_numpy().astype(float)
+        for category in betas.keys():
+            y = data.to_pandas()[category].to_numpy().astype(float)
+
+            mu = mus[category]
+            ref_mu = ref_mus[category]
+            dmu_deta = ref_mu * (1 - ref_mu)
 
             reference_category_indices = reference_category_indices * (y==0)
 
-            z = etas[category] + LR*(y - mus[category])/dmu_deta[category]
-
-            #if category == 'X__cat__2' and tuple(X_labels) == ('Y__ord__2', 'Y__ord__3', 'Z'):
-            #    print(dmu_deta['X__cat__2'])
-
-            # regular 1-vs-rest weight matrix
-            W = np.diag(dmu_deta[category]) # dmu_deta**2/dmu_deta since it is binomial
-
-            # mu_i - mu_i*mu_j = mu_i*(1-mu_i) on diagonal, off-diagonal has cov
-            #W = np.diag(mus[category]) - np.outer(mus[category], mus[category])
+            z = etas[category] + LR*(y-ref_mu)/dmu_deta
+            W = np.diag(dmu_deta) # dmu_deta**2/dmu_deta since it is binomial
 
             xw = X.T @ W
             xwx = xw @ X
@@ -153,14 +148,14 @@ class CategoricalComputationUnit(ComputationUnit):
             results[category] = {'xwx': xwx, 'xwz': xwz}
 
             # LLF
-            llf += np.sum(np.log(np.take(mus[category], np.nonzero(y)[0])))
+            llf += np.sum(np.log(np.take(mu, np.nonzero(y)[0])))
             ## LLF SATURATED (for deviance)
             #llf_saturated += np.sum(y * np.log(np.clip(y, 1e-10, None)))
 
         # LLF
         llf += np.sum(np.log(np.take(1/denom, reference_category_indices.nonzero()[0])))
 
-        ## LLF SATURATED (for deviance)
+        # LLF SATURATED (for deviance)
         #llf_saturated += np.sum(reference_category_indices * np.log(np.clip(reference_category_indices, 1e-10, None)))
         deviance = 2 * (llf_saturated - llf)
 
