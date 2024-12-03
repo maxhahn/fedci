@@ -38,7 +38,6 @@ class ComputationHelper():
         z = eta + LR*(y - mu)/dmu_deta
 
         if type(model.family) == family.Gaussian:
-            #var_y = model.scale
             var_y = np.var(y-mu)
         elif type(model.family) == family.Binomial:
             var_y = dmu_deta
@@ -200,19 +199,21 @@ class OrdinalComputationUnit(ComputationUnit):
 
         mus = [(level, model.predict()) for level, model
                       in sorted(models.items(), key=lambda lvl: int(lvl[0].split('__ord__')[-1]))]
-
         # get diffs of mus of successive levels
         mus_diff = [mus[0]]
-        mus_diff += [(mus_diff[i][0], mus_diff[i][1] - mus_diff[i-1][1]) for i in range(1,len(mus_diff))]
-        mus_diff.append((mus_diff[-1][0],1-mus_diff[-1][1]))
+        mus_diff.extend([(mus[i][0], mus[i][1] - mus[i-1][1]) for i in range(1,len(mus))])
+        mus_diff.append(('ref',1-mus[-1][1]))
 
         # fix negative probs
         sign_fix = np.column_stack([e[1] for e in mus_diff])
         problematic_indices = np.where(sign_fix < 0)[0]
-        problem_probs = np.abs(sign_fix[problematic_indices])
-        normalized_probs = problem_probs / np.sum(problem_probs, axis=0)
-        sign_fix[problematic_indices] = normalized_probs
-        mus_diff = [(mus_diff[i][0], sign_fix[:,i]) for i in range(len(mus_diff))]
+        if len(problematic_indices) > 0:
+            problem_probs = np.abs(sign_fix[problematic_indices])
+            row_sums = np.clip(np.sum(problem_probs, axis=1, keepdims=True), 1e-8, None)
+            normalized_probs = problem_probs / row_sums
+            sign_fix[problematic_indices] = normalized_probs
+            mus_diff = [(mus_diff[i][0], sign_fix[:,i]) for i in range(len(mus_diff))]
+        mus_diff = [(l, np.clip(p, 1e-8, None)) for l,p in mus_diff]
 
         llf = 0
         llf_saturated = 0
@@ -223,6 +224,7 @@ class OrdinalComputationUnit(ComputationUnit):
             current_level_indices = data[y_label].to_numpy() == level_int
             reference_level_indices = reference_level_indices * (1-current_level_indices)
 
+            llf += np.sum(np.log(np.take(mu_diff, current_level_indices.nonzero()[0])))
         _, mu_diff = mus_diff[-1]
         llf += np.sum(np.log(np.take(mu_diff, reference_level_indices.nonzero()[0])))
         deviance = 2 * (llf_saturated - llf)
