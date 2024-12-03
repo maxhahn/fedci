@@ -109,6 +109,7 @@ class CategoricalComputationUnit(ComputationUnit):
         X = X.to_numpy().astype(float)
 
         models = {}
+        results = {}
         for category in betas.keys():
             y = data.to_pandas()[category]
             y = y.to_numpy().astype(float)
@@ -119,34 +120,25 @@ class CategoricalComputationUnit(ComputationUnit):
                 beta=betas[category],
                 glm_family=family.Binomial()
             )
+            current_result = ComputationHelper.run_model(
+                y=y,
+                X=X,
+                model=models[category]
+            )
+            results[category] = {'xwx': current_result['xwx'], 'xwz': current_result['xwz']}
 
+        # calculate multinomial llf
         etas = {c:np.clip(m.predict(which='linear'), -350, 350) for c,m in models.items()}
-        ref_mus = {c:np.clip(m.predict(), 1e-8, 1-1e-8) for c,m in models.items()}
         denom = 1 + sum(np.exp(eta) for eta in etas.values())
         mus = {c:np.clip(np.exp(eta)/denom, 1e-8, 1-1e-8) for c,eta in etas.items()}
 
-        results = {}
         llf = 0
         llf_saturated = 0
         reference_category_indices = np.ones(len(data))
         for category in betas.keys():
             y = data.to_pandas()[category].to_numpy().astype(float)
-
             mu = mus[category]
-            ref_mu = ref_mus[category]
-            dmu_deta = ref_mu * (1 - ref_mu)
-
             reference_category_indices = reference_category_indices * (y==0)
-
-            z = etas[category] + LR*(y-ref_mu)/dmu_deta
-            W = np.diag(dmu_deta) # dmu_deta**2/dmu_deta since it is binomial
-
-            xw = X.T @ W
-            xwx = xw @ X
-            xwz = xw @ z
-
-            results[category] = {'xwx': xwx, 'xwz': xwz}
-
             # LLF
             llf += np.sum(np.log(np.take(mu, np.nonzero(y)[0])))
             ## LLF SATURATED (for deviance)
