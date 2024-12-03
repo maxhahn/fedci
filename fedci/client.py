@@ -33,12 +33,13 @@ class ComputationHelper():
         # delta g' is derivative of inverse link function
         derivative_inverse_link = model.family.link.inverse_deriv
         dmu_deta = derivative_inverse_link(eta)
+        dmu_deta = np.clip(dmu_deta, 1e-8, 1-1e-8)
 
         z = eta + LR*(y - mu)/dmu_deta
 
         if type(model.family) == family.Gaussian:
             #var_y = model.scale
-            var_y = np.var(model.resid_response)
+            var_y = np.var(y-mu)
         elif type(model.family) == family.Binomial:
             var_y = dmu_deta
         else:
@@ -122,10 +123,8 @@ class CategoricalComputationUnit(ComputationUnit):
 
         etas = {c:np.clip(m.predict(which='linear'), -350, 350) for c,m in models.items()}
         denom = 1 + sum(np.exp(eta) for eta in etas.values())
-        mus = {c:np.clip(np.exp(eta)/denom,1e-15,1-1e-15) for c,eta in etas.items()}
-        dmu_deta = {c:mu*(1-mu) for c,mu in mus.items()}
-
-
+        mus = {c:np.clip(np.exp(eta)/denom,1e-10,1-1e-10) for c,eta in etas.items()}
+        dmu_deta = {c:np.clip(mu*(1-mu), 1e-15, None) for c,mu in mus.items()}
 
         results = {}
         llf = 0
@@ -143,10 +142,10 @@ class CategoricalComputationUnit(ComputationUnit):
             #    print(dmu_deta['X__cat__2'])
 
             # regular 1-vs-rest weight matrix
-            #W = np.diag(dmu_deta[category]) # dmu_deta**2/dmu_deta since it is binomial
+            W = np.diag(dmu_deta[category]) # dmu_deta**2/dmu_deta since it is binomial
 
             # mu_i - mu_i*mu_j = mu_i*(1-mu_i) on diagonal, off-diagonal has cov
-            W = np.diag(mus[category]) - np.outer(mus[category], mus[category])
+            #W = np.diag(mus[category]) - np.outer(mus[category], mus[category])
 
             xw = X.T @ W
             xwx = xw @ X
@@ -199,43 +198,33 @@ class OrdinalComputationUnit(ComputationUnit):
             )
             results[level] = {'xwx': current_result['xwx'], 'xwz': current_result['xwz']}
 
-        model_list = [(level, model.predict()) for level, model
+        mus = [(level, model.predict()) for level, model
                       in sorted(models.items(), key=lambda lvl: int(lvl[0].split('__ord__')[-1]))]
+
+        # get diffs of mus of successive levels
+        mus_diff = [mus[0]]
+        mus_diff += [(mus_diff[i][0], mus_diff[i][1] - mus_diff[i-1][1]) for i in range(1,len(mus_diff))]
+        mus_diff.append((mus_diff[-1][0],1-mus_diff[-1][1]))
+
+        # fix negative probs
+        sign_fix = np.column_stack([e[1] for e in mus_diff])
+        problematic_indices = np.where(sign_fix < 0)[0]
+        problem_probs = np.abs(sign_fix[problematic_indices])
+        normalized_probs = problem_probs / np.sum(problem_probs, axis=0)
+        sign_fix[problematic_indices] = normalized_probs
+        mus_diff = [(mus_diff[i][0], sign_fix[:,i]) for i in range(len(mus_diff))]
 
         llf = 0
         llf_saturated = 0
-        # Calculate data for Y=1
-        level, mu0 = model_list[0]
-        mu0 = np.clip(mu0, 1e-10, 1-1e-10)
-        level_int = int(level.split('__ord__')[-1])
-        current_level_indices = data[y_label].to_numpy() == level_int
-        reference_level_indices = 1-current_level_indices
-        llf += np.sum(np.log(np.take(mu0, current_level_indices.nonzero()[0])))
-        #llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
-
-        # Running P(Y=k) = P(Y<=k) - P(Y<=k-1) for k=1...M-1
-        for i in range(1,len(model_list)):
-            _, mu0 = model_list[i-1]
-            level, mu1 = model_list[i]
-
-            mu0 = np.clip(mu0, 1e-10, 1-1e-10)
-            mu1 = np.clip(mu1, 1e-10, 1-1e-10)
-
-            mu_diff = np.clip(mu1 - mu0, 1e-10, 1-1e-10)
-
-            # update reference category indices
+        reference_level_indices = np.ones(len(data))
+        for i in range(len(mus_diff)-1):
+            level, mu_diff = mus_diff[i]
             level_int = int(level.split('__ord__')[-1])
             current_level_indices = data[y_label].to_numpy() == level_int
             reference_level_indices = reference_level_indices * (1-current_level_indices)
 
-            # LLF
-            llf += np.sum(np.log(np.take(mu_diff, current_level_indices.nonzero()[0])))
-            #llf_saturated += np.sum(current_level_indices * np.log(np.clip(current_level_indices, 1e-10, None)))
-        # Calculate data for Y=M
-        _, mu1 = model_list[-1]
-        mu1 = np.clip(mu1, 1e-10, 1-1e-10)
-        llf += np.sum(np.log(np.take(np.clip(1-mu1, 1e-10, 1-1e-10), reference_level_indices.nonzero()[0])))
-        #llf_saturated += np.sum(reference_level_indices * np.log(np.clip(reference_level_indices, 1e-10, None)))
+        _, mu_diff = mus_diff[-1]
+        llf += np.sum(np.log(np.take(mu_diff, reference_level_indices.nonzero()[0])))
         deviance = 2 * (llf_saturated - llf)
 
         return {
