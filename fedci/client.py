@@ -125,6 +125,8 @@ class CategoricalComputationUnit(ComputationUnit):
         mus = {c:np.clip(np.exp(eta)/denom,1e-15,1-1e-15) for c,eta in etas.items()}
         dmu_deta = {c:mu*(1-mu) for c,mu in mus.items()}
 
+
+
         results = {}
         llf = 0
         llf_saturated = 0
@@ -135,9 +137,16 @@ class CategoricalComputationUnit(ComputationUnit):
 
             reference_category_indices = reference_category_indices * (y==0)
 
-            z = etas[category] + (y - mus[category])/dmu_deta[category]
+            z = etas[category] + LR*(y - mus[category])/dmu_deta[category]
 
-            W = np.diag(dmu_deta[category]) # dmu_deta**2/dmu_deta since it is binomial
+            #if category == 'X__cat__2' and tuple(X_labels) == ('Y__ord__2', 'Y__ord__3', 'Z'):
+            #    print(dmu_deta['X__cat__2'])
+
+            # regular 1-vs-rest weight matrix
+            #W = np.diag(dmu_deta[category]) # dmu_deta**2/dmu_deta since it is binomial
+
+            # mu_i - mu_i*mu_j = mu_i*(1-mu_i) on diagonal, off-diagonal has cov
+            W = np.diag(mus[category]) - np.outer(mus[category], mus[category])
 
             xw = X.T @ W
             xwx = xw @ X
