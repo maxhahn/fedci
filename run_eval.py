@@ -7,7 +7,7 @@ import glob
 
 # %%
 # Load data
-path =  './experiments/n1/*ndjson'
+path =  './experiments/base/*ndjson'
 try:
     df = pl.read_ndjson(path, ignore_errors=True)
 except:
@@ -32,14 +32,14 @@ df = df.with_columns(
     conditioning_type=pl.col('name').str.slice(4)
 )
 
-quickfix = {
-    'Unc. Indep.' : 'Unc. Indep. : X Y',
-    'Unc. Dep.' : 'Unc. Dep. : X -> Y',
-    'Con. Dep.' : 'Con. Dep. : X -> Z <- Y',
-    'Con. Indep.' : 'Con. Indep. : X <- Z -> Y'
-}
+# quickfix = {
+#     'Unc. Indep.' : 'Unc. Indep. : X Y',
+#     'Unc. Dep.' : 'Unc. Dep. : X -> Y',
+#     'Con. Dep.' : 'Con. Dep. : X -> Z <- Y',
+#     'Con. Indep.' : 'Con. Indep. : X <- Z -> Y'
+# }
 
-df = df.with_columns(pl.col('conditioning_type').replace(quickfix))
+# df = df.with_columns(pl.col('conditioning_type').replace(quickfix))
 
 print(df.group_by('experiment_type', 'conditioning_type').agg(pl.len()).sort('len'))
 df = df.sort('experiment_type', 'conditioning_type')

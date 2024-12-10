@@ -1,10 +1,11 @@
+from re import A
 from .utils import VariableType, ClientResponseData, BetaUpdateData
 import polars as pl
 import numpy as np
 
 from typing import Dict, List
 
-from .env import DEBUG, EXPAND_ORDINALS, RIDGE, LR
+from .env import DEBUG, EXPAND_ORDINALS, RIDGE, LR, OVR
 
 import statsmodels.api as sm
 from statsmodels.genmod.generalized_linear_model import GLMResults
@@ -102,6 +103,130 @@ class BinaryComputationUnit(ComputationUnit):
         )
 
 class CategoricalComputationUnit(ComputationUnit):
+    @staticmethod
+    def compute(data, y_label, X_labels, beta):
+        assert len(beta) == 1, 'Running multinomial regression requires usage of a single beta'
+        beta = beta[y_label]
+        y_dummy_columns = [c for c in data.columns if c.startswith(f'{y_label}__cat__')]
+
+        X = data.to_pandas()[sorted(X_labels)]
+        X['__const'] = 1
+        X = X.to_numpy().astype(float)
+
+        num_categories = len(y_dummy_columns) # J = num_classes
+        num_features = len(X_labels)+1 # K = num_features
+
+        def cdf(X_data):
+            X_data = np.clip(X_data, -350, 350)
+            eXB = np.column_stack((np.ones(len(X_data)), np.exp(X_data)))
+            return eXB/eXB.sum(1)[:,None]
+
+        def hess(beta):
+            beta = beta.reshape(num_features, -1, order='F') # reshape (K*J,) -> (K, J)
+
+            pr = cdf(np.dot(X,beta)) # (num_samples, num_features) @ (num_features, num_cats) -> (num_samples, num_cats)
+            pr = np.clip(pr, 1e-8, 1)
+            partials = []
+
+            for i in range(1,num_categories):
+                for j in range(1,num_categories): # this loop assumes we drop the first col.
+                    weight = (pr[:,i]*((1 if i==j else 0)-pr[:,j]))[:,None]
+                    partials.append(-(np.dot((weight*X).T, X)))
+
+            H = np.array(partials)
+            # the developer's notes on multinomial should clear this math up
+            H = np.transpose(H.reshape(
+                num_categories-1, num_categories-1, num_features, num_features), (0, 2, 1, 3)
+            ).reshape(
+                (num_categories-1)*num_features, (num_categories-1)*num_features
+            )
+            return H
+
+        def score(beta):
+            y = data.to_pandas()[y_dummy_columns[1:]].to_numpy()
+            beta = beta.reshape(num_features, -1, order='F')
+            firstterm = (y - cdf(np.dot(X,beta))[:,1:])
+            # ADD ETA TO FIRSTTERM SO THAT CLIENT AGGREGATION IS STREAMLINED AND XWz is passed over network
+            return np.dot(firstterm.T, X).flatten()
+
+        h = hess(beta)
+        s = score(beta)
+
+        results = {y_label: {'xwx': h, 'xwz': s}}
+
+        def loglike(beta):
+            y = data.to_pandas()[y_dummy_columns].to_numpy()
+            beta = beta.reshape(num_features, -1, order='F')
+            d = y
+            pr = cdf(np.dot(X,beta))
+            logprob = np.log(np.clip(pr, 1e-8, 1))
+            return np.sum(d * logprob)
+
+        llf = loglike(beta)
+        deviance = -2*llf
+
+        return {
+            'llf': llf,
+            'deviance': deviance,
+            'beta_update_data': results
+        }
+
+    @staticmethod
+    def compute_ovr(data, y_label, X_labels, betas):
+        X = data.to_pandas()[sorted(X_labels)]
+        X['__const'] = 1
+        X = X.to_numpy().astype(float)
+
+        models = {}
+        results = {}
+        for category in betas.keys():
+            y = data.to_pandas()[category]
+            y = y.to_numpy().astype(float)
+
+            models[category] = ComputationHelper.get_regression_model(
+                y=y,
+                X=X,
+                beta=betas[category],
+                glm_family=family.Binomial()
+            )
+            current_result = ComputationHelper.run_model(
+                y=y,
+                X=X,
+                model=models[category]
+            )
+            results[category] = {'xwx': current_result['xwx'], 'xwz': current_result['xwz']}
+
+        # calculate multinomial llf
+        etas = {c:np.clip(m.predict(which='linear'), -350, 350) for c,m in models.items()}
+        denom = 1 + sum(np.exp(eta) for eta in etas.values())
+        mus = {c:np.clip(np.exp(eta)/denom, 1e-8, 1-1e-8) for c,eta in etas.items()}
+
+        llf = 0
+        llf_saturated = 0
+        reference_category_indices = np.ones(len(data))
+        for category in betas.keys():
+            y = data.to_pandas()[category].to_numpy().astype(float)
+            mu = mus[category]
+            reference_category_indices = reference_category_indices * (y==0)
+            # LLF
+            llf += np.sum(np.log(np.take(mu, np.nonzero(y)[0])))
+            ## LLF SATURATED (for deviance)
+            #llf_saturated += np.sum(y * np.log(np.clip(y, 1e-10, None)))
+
+        # LLF
+        llf += np.sum(np.log(np.take(1/denom, reference_category_indices.nonzero()[0])))
+
+        # LLF SATURATED (for deviance)
+        #llf_saturated += np.sum(reference_category_indices * np.log(np.clip(reference_category_indices, 1e-10, None)))
+        deviance = 2 * (llf_saturated - llf)
+
+        return {
+            'llf': llf,
+            'deviance': deviance,
+            'beta_update_data': results
+        }
+
+class CategoricalOVRComputationUnit(ComputationUnit):
     @staticmethod
     def compute(data, y_label, X_labels, betas):
         X = data.to_pandas()[sorted(X_labels)]
@@ -233,11 +358,9 @@ polars_dtype_map = {
 regression_computation_map = {
     VariableType.CONTINUOS: ContinousComputationUnit,
     VariableType.BINARY: BinaryComputationUnit,
-    VariableType.CATEGORICAL: CategoricalComputationUnit,
+    VariableType.CATEGORICAL: CategoricalComputationUnit if OVR == 0 else CategoricalOVRComputationUnit,
     VariableType.ORDINAL: OrdinalComputationUnit
 }
-
-# TODO: move out __cat__, __ord__, and __const
 
 class Client():
     def __init__(self, data: pl.DataFrame):
@@ -271,7 +394,9 @@ class Client():
 
         # expand categoricals
         all_possible_categorical_expressions = set([li for l in categorical_expressions.values() for li in l])
+        temp = self.data.select([column for column, dtype in self.schema.items() if dtype == VariableType.CATEGORICAL])
         _data = self.data.to_dummies([column for column, dtype in self.schema.items() if dtype == VariableType.CATEGORICAL], separator='__cat__')
+        _data = _data.with_columns(temp)
         missing_cols = list(all_possible_categorical_expressions - set(_data.columns))
         _data = _data.with_columns(*[pl.lit(0.0).alias(c) for c in missing_cols])
 

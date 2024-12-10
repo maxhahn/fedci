@@ -7,17 +7,14 @@ class VariableType(enum.Enum):
     BINARY = 1
     CATEGORICAL = 2
     ORDINAL = 3
-    
+
 @dataclass
 class BetaUpdateData:
     xwx: object
     xwz: object
-    
+
 @dataclass
 class ClientResponseData:
     llf: float
     deviance: float
     beta_update_data: Dict[str, BetaUpdateData]
-    
-
-    

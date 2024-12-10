@@ -3,10 +3,16 @@ import numpy as np
 from typing import List, Dict
 from itertools import chain, combinations
 
-from .env import EXPAND_ORDINALS, RIDGE
+from .env import EXPAND_ORDINALS, OVR, RIDGE
 from .utils import BetaUpdateData, ClientResponseData, VariableType
 
 class RegressionTest():
+    @classmethod
+    def create_and_overwrite_beta(cls, y_label, X_labels, beta):
+        c = cls(y_label, X_labels)
+        c.beta = beta
+        return c
+
     def __init__(self, y_label: str, X_labels: List[str]):
         self.y_label = y_label
         self.X_labels = X_labels
@@ -25,10 +31,13 @@ class RegressionTest():
         except np.linalg.LinAlgError:
             xwx_inv = np.linalg.pinv(xwx)
 
-        if RIDGE > 0:
-            self.beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
+        if OVR == 0 and len(self.beta) > len(self.X_labels)+1:
+            self.beta = self.beta - xwx_inv @ xwz
         else:
-            self.beta = xwx_inv @ xwz
+            if RIDGE > 0:
+                self.beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
+            else:
+                self.beta = xwx_inv @ xwz
 
     def __lt__(self, other):
         if len(self.X_labels) < len(other.X_labels): return True
@@ -46,11 +55,23 @@ class RegressionTest():
         return f'RegressionTest {self.y_label} ~ {", ".join(self.X_labels + ["1"])} - beta: {self.beta}'
 
 class Test():
-    def __init__(self, y_label, X_labels: List[str], y_labels: List[str] = None, max_iterations=25):
+    def __init__(self,
+        y_label,
+        X_labels: List[str],
+        y_labels: List[str] = None,
+        max_iterations=25,
+        y_type=None
+    ):
         self.y_label = y_label
         self.X_labels = X_labels
         if y_labels is None: y_labels = [y_label]
+        self.y_labels = y_labels
         self.tests: Dict[str, RegressionTest] = {_y_label: RegressionTest(_y_label, X_labels) for _y_label in y_labels}
+
+        if y_type == VariableType.CATEGORICAL and OVR == 0:
+            _beta = np.concatenate([t.beta for t in self.tests.values()])
+            self.tests = {y_label: RegressionTest.create_and_overwrite_beta(y_label, X_labels, _beta)}
+
         self.llf = None
         self.last_deviance = None
         self.deviance = 0
@@ -79,7 +100,7 @@ class Test():
     def get_degrees_of_freedom(self):
         # len tests -> num_cats -1
         # len X_labels + 1 -> x vars, intercept
-        return len(self.tests)*(len(self.X_labels) + 1)
+        return len(self.y_labels)*(len(self.X_labels) + 1)
 
     def get_llf(self, client_subset=None):
         if client_subset is not None:
@@ -177,21 +198,24 @@ class TestEngine():
                 self.tests.extend([Test(
                     y_label=y_var,
                     X_labels=sorted(list(x_vars)),
-                    max_iterations=max_iterations
+                    max_iterations=max_iterations,
+                    y_type=schema[y_var]
                 ) for x_vars in powerset_of_regressors])
             elif schema[y_var] == VariableType.BINARY:
                 self.tests.extend([Test(
                     y_label=y_var,
                     X_labels=sorted(list(x_vars)),
-                    max_iterations=max_iterations
+                    max_iterations=max_iterations,
+                    y_type=schema[y_var]
                 ) for x_vars in powerset_of_regressors])
             elif schema[y_var] == VariableType.CATEGORICAL:
                 assert y_var in category_expressions, f'Categorical variable {y_var} is not in expression mapping'
                 self.tests.extend([Test(
                     y_label=y_var,
                     X_labels=sorted(list(x_vars)),
-                    y_labels=category_expressions[y_var][1:],
-                    max_iterations=max_iterations
+                    y_labels=category_expressions[y_var][:-1],
+                    max_iterations=max_iterations,
+                    y_type=schema[y_var]
                 ) for x_vars in powerset_of_regressors])
             elif schema[y_var] == VariableType.ORDINAL:
                 assert y_var in ordinal_expressions, f'Ordinal variable {y_var} is not in expression mapping'
@@ -199,12 +223,13 @@ class TestEngine():
                     y_label=y_var,
                     X_labels=sorted(list(x_vars)),
                     y_labels=ordinal_expressions[y_var][:-1],
-                    max_iterations=max_iterations
+                    max_iterations=max_iterations,
+                    y_type=schema[y_var]
                 ) for x_vars in powerset_of_regressors])
             else:
                 raise Exception(f'Unknown variable type {schema[y_var]} encountered!')
 
-        self.tests: List[Test] = sorted(self.tests)
+        self.tests: List[Test] = sorted(self.tests, reverse=True)
         self.current_test_index = 0
 
     def is_finished(self):

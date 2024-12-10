@@ -229,17 +229,23 @@ configurations *= num_runs
 
 bad_seeds = []
 #(p1: 0.526709 and p2: 0.6335279)
-run_configured_test(configurations[0] + ([('X', 'Y', ('Z',))],), seed=405)
+#run_configured_test(configurations[0] + ([('X', 'Y', ('Z',))],), seed=51)
 #for i in range(1000):
-#    run_configured_test(configurations[0] + ([('X', 'Y', ('Z',))],), seed=i+400)
-# import polars as pl
-# data = pl.read_parquet('error-data-01-booled.parquet')
-# run_test_on_data(data,
-#                 'test',
-#                 1,
-#                 '',
-#                 '',
-#                 None,
-#                 seed=None,
-#                 test_targets=[('X', 'Y', ('Z',))]
-#                 )
+#    run_configured_test(configurations[0] + ([('X', 'Y', ('Z',))],), seed=i+40)
+import polars as pl
+data = pl.read_parquet('error-data-73.parquet')
+
+#data.with_columns(pl.col('X') == '2').write_parquet('error-data-73-booled.parquet')
+pl.Config.set_tbl_rows(30)
+print(data.group_by('X', 'Y').len().sort('X', 'Y'))
+#print(data.cast(pl.Float32).corr())
+
+run_test_on_data(data,
+                'test',
+                1,
+                '',
+                '',
+                None,
+                seed=None,
+                test_targets=[('X', 'Y', ('Z', ))]
+                )
