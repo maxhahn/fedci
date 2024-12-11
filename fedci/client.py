@@ -1,4 +1,7 @@
 from re import A
+
+from holoviews.core.ndmapping import asdim
+from scipy.sparse.linalg._eigen.lobpcg.lobpcg import LinAlgError
 from .utils import VariableType, ClientResponseData, BetaUpdateData
 import polars as pl
 import numpy as np
@@ -127,13 +130,13 @@ class CategoricalComputationUnit(ComputationUnit):
             pr = cdf(np.dot(X,beta)) # (num_samples, num_features) @ (num_features, num_cats) -> (num_samples, num_cats)
             pr = np.clip(pr, 1e-8, 1)
             partials = []
-
             for i in range(1,num_categories):
                 for j in range(1,num_categories): # this loop assumes we drop the first col.
                     weight = (pr[:,i]*((1 if i==j else 0)-pr[:,j]))[:,None]
                     partials.append(-(np.dot((weight*X).T, X)))
 
             H = np.array(partials)
+            #print(H.shape, partials[0].shape, num_categories, num_features)
             # the developer's notes on multinomial should clear this math up
             H = np.transpose(H.reshape(
                 num_categories-1, num_categories-1, num_features, num_features), (0, 2, 1, 3)
@@ -142,15 +145,158 @@ class CategoricalComputationUnit(ComputationUnit):
             )
             return H
 
+        def hess2(beta):
+            beta = beta.reshape(num_features, -1, order='F') # reshape (K*J,) -> (K, J)
+
+            pr = cdf(np.dot(X,beta)) # (num_samples, num_features) @ (num_features, num_cats) -> (num_samples, num_cats)
+            pr = np.clip(pr, 1e-8, 1)
+            weights = []
+            for i in range(1,num_categories):
+                for j in range(1,num_categories): # this loop assumes we drop the first col.
+                    weight = (pr[:,i]*((1 if i==j else 0)-pr[:,j]))[:,None]
+                    weights.append(np.broadcast_to(weight, X.shape))
+
+            W = np.array(weights)
+
+            XW = X*W
+            XW = np.transpose(XW, (0,2,1))
+
+            XWX = -np.dot(XW, X)
+            XWX = np.transpose(XWX.reshape(
+                num_categories-1, num_categories-1, num_features, num_features), (0, 2, 1, 3)
+            ).reshape(
+                (num_categories-1)*num_features, (num_categories-1)*num_features
+            )
+            return XWX
+
+        def hessx(beta):
+            beta = beta.reshape(num_features, -1, order='F') # reshape (K*J,) -> (K, J)
+
+            pr = cdf(np.dot(X,beta)) # (num_samples, num_features) @ (num_features, num_cats) -> (num_samples, num_cats)
+            pr = np.clip(pr, 1e-8, 1)
+
+            derivs = []
+            for i in range(1,num_categories):
+                for j in range(1,num_categories): # this loop assumes we drop the first col.
+                    deriv = (pr[:,i]*((1 if i==j else 0)-pr[:,j]))
+                    derivs.append(np.diag(deriv))
+
+            W = np.array(derivs)
+
+            XW = np.transpose(W@X, (0,2,1))
+
+            XWX = -np.dot(XW, X)
+            XWX = np.transpose(XWX.reshape(
+                num_categories-1, num_categories-1, num_features, num_features), (0, 2, 1, 3)
+            ).reshape(
+                (num_categories-1)*num_features, (num_categories-1)*num_features
+            )
+            return XWX
+
         def score(beta):
             y = data.to_pandas()[y_dummy_columns[1:]].to_numpy()
             beta = beta.reshape(num_features, -1, order='F')
             firstterm = (y - cdf(np.dot(X,beta))[:,1:])
+            score_vec = np.dot(firstterm.T, X).flatten()
             # ADD ETA TO FIRSTTERM SO THAT CLIENT AGGREGATION IS STREAMLINED AND XWz is passed over network
-            return np.dot(firstterm.T, X).flatten()
+            return score_vec
 
-        h = hess(beta)
+        def score2(beta):
+            y = data.to_pandas()[y_dummy_columns].to_numpy()
+            beta = beta.reshape(num_features, -1, order='F')
+
+            eta = np.dot(X,beta)
+            pr = cdf(eta)
+            pr = np.clip(pr, 1e-8, 1)
+
+            dmu_deta = pr[:,1:]*(1 -pr[:,1:])
+            dmu_deta = np.clip(dmu_deta, 1e-8,1)
+
+            z = eta + (y[:,1:] - pr[:,1:])/dmu_deta
+
+            W = dmu_deta
+            Wz = W*z
+
+            XWz = np.dot(X.T, z)
+            XWz = XWz.flatten()
+
+            return XWz
+
+        def scorex(beta):
+            y = data.to_pandas()[y_dummy_columns].to_numpy()
+            beta = beta.reshape(num_features, -1, order='F')
+
+            eta = np.dot(X,beta)
+            pr = cdf(eta)
+            pr = np.clip(pr, 1e-8, 1)
+
+            #eta = np.hstack([np.zeros((eta.shape[0], 1)), eta])
+
+            dmu_deta = pr[:,1:]*(1 -pr[:,1:])
+            dmu_deta = np.clip(dmu_deta, 1e-8,1)
+
+            n_samples = X.shape[0]
+            n_classes = num_categories
+
+            W = np.zeros((n_samples, n_classes-1, n_classes-1))
+            for i in range(n_samples):
+                p = pr[i,1:]
+                W[i] = np.diag(p) - np.outer(p, p)  # Covariance structure
+
+            # Compute working response z
+            y_minus_pr = y[:,1:] - pr[:,1:]  # (n_samples, n_classes)
+            z = np.zeros_like(eta)
+            for i in range(n_samples):
+                dmu_deta_inv = np.linalg.pinv(W[i])  # Inverse of Cov(pr)
+                #print(z.shape, eta.shape, dmu_deta_inv.shape, y_minus_pr[i].shape)
+                z[i] = eta[i] + np.dot(dmu_deta_inv, y_minus_pr[i])
+
+            Wz = np.zeros((n_samples, num_categories-1))
+            print(Wz[0].shape, X[0].shape, W[0].shape, z[0].shape)
+            for i in range(n_samples):
+                Wz[i] = W[i] @ z[i]
+
+            print(Wz.sum(axis=0).shape, X.shape)
+            XWz = np.dot(X.T, Wz).T#.sum(axis=0))  # Combine for all samples
+            print(XWz.shape)
+            return XWz.flatten()
+
+
+        def score3(beta):
+            y = data.to_pandas()[y_dummy_columns].to_numpy()
+            beta = beta.reshape(num_features, -1, order='F')
+
+            eta = np.dot(X,beta)
+            pr = cdf(eta)
+            pr = np.clip(pr, 1e-8, 1)
+
+            dmu_deta = pr[:,1:]*(1 -pr[:,1:])
+            dmu_deta = np.clip(dmu_deta, 1e-8,1)
+
+
+            z = eta + (y[:,1:] - pr[:,1:])/dmu_deta
+
+            a = dmu_deta**2
+            print(np.diag(pr[:,1]).shape, np.outer(pr[:,1], pr[:,1]).shape)
+            b = 1/(np.diag(pr[:,1])-np.outer(pr[:,1], pr[:,1]))
+            print(a.shape, b.shape)
+            W = a @ b
+            Wz = W*z
+
+            XWz = np.dot(X.T, z)
+            XWz = XWz.flatten()
+
+            firstterm = (y[:,1:] - pr[:,1:]) / dmu_deta
+            score_vec = np.dot(firstterm.T, X).flatten()
+
+            return XWz, dmu_deta, score_vec
+
+        print(f'{y_label} ~ {X_labels}')
+
+        #hess3(beta)
+        h = hessx(beta)
         s = score(beta)
+
 
         results = {y_label: {'xwx': h, 'xwz': s}}
 

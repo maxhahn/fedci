@@ -32,7 +32,7 @@ class RegressionTest():
             xwx_inv = np.linalg.pinv(xwx)
 
         if OVR == 0 and len(self.beta) > len(self.X_labels)+1:
-            self.beta = self.beta - xwx_inv @ xwz
+           self.beta = self.beta - xwx_inv @ xwz
         else:
             if RIDGE > 0:
                 self.beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
@@ -229,7 +229,7 @@ class TestEngine():
             else:
                 raise Exception(f'Unknown variable type {schema[y_var]} encountered!')
 
-        self.tests: List[Test] = sorted(self.tests, reverse=True)
+        self.tests: List[Test] = sorted(self.tests)
         self.current_test_index = 0
 
     def is_finished(self):
