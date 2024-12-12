@@ -132,9 +132,9 @@ class CategoricalComputationUnit(ComputationUnit):
         beta = beta.reshape(num_features, -1, order='F')
 
         # Compute eta and mu
-        eta = X @ beta               # N x (J-1)
-        mu = np.clip(softmax(eta), 1e-8, 1)            # N x J
-        mu_reduced = mu[:, 1:]       # N x (J-1)
+        eta = np.clip(X @ beta, -350, 350)             # N x (J-1)
+        mu = np.clip(softmax(eta), 1e-8, 1-1e-8)            # N x J
+        mu_reduced = mu[:, 1:]                         # N x (J-1)
 
         # Initialize accumulators for XWX and XWz
         XWX = np.zeros((num_features * (num_categories - 1), num_features * (num_categories - 1)))
