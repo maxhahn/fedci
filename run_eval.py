@@ -7,7 +7,7 @@ import glob
 
 # %%
 # Load data
-path =  './experiments/base/*ndjson'
+path =  './experiments/base2/*ndjson'
 try:
     df = pl.read_ndjson(path, ignore_errors=True)
 except:

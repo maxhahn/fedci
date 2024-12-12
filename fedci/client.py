@@ -154,7 +154,7 @@ class CategoricalComputationUnit(ComputationUnit):
             z_i = eta[i] + var_i_inv @ (yi - pi)  # (J-1)
 
             # Compute local contributions to XWX and XWz
-            Xi = np.kron(np.eye(num_categories - 1), X[i:i+1])  # (J-1)*K x K
+            Xi = np.kron(np.eye(num_categories - 1), X[i:i+1])  # (J-1) x (J-1)*K
             Wi = var_i  # (J-1) x (J-1)
             XWX += Xi.T @ Wi @ Xi
             XWz += Xi.T @ Wi @ z_i

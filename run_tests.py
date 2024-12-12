@@ -9,6 +9,7 @@ import random
 # EXPAND_ORDINALS=1 LR=0.4 RIDGE=0.02 python3 run_tests.py
 # EXPAND_ORDINALS=1 python3 run_tests.py
 # EXPAND_ORDINALS=1 OVR=0 python3 run_tests.py
+# python3 run_tests.py
 
 # Setup Data
 # ## L-B CASE
@@ -227,7 +228,7 @@ test_targets_uncon = [('X', 'Y', ())]
 test_targets_con = [('X', 'Y', ('Z',))]
 configurations = [c + (test_targets_uncon,) if 'Unc.' in c[0].name else c + (test_targets_con,) for c in configurations]
 
-num_runs = 50
+num_runs = 100
 
 configurations *= num_runs
 
