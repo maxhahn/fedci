@@ -133,7 +133,7 @@ class CategoricalComputationUnit(ComputationUnit):
 
         # Compute eta and mu
         eta = X @ beta               # N x (J-1)
-        mu = softmax(eta)            # N x J
+        mu = np.clip(softmax(eta), 1e-8, 1)            # N x J
         mu_reduced = mu[:, 1:]       # N x (J-1)
 
         # Initialize accumulators for XWX and XWz
@@ -150,7 +150,6 @@ class CategoricalComputationUnit(ComputationUnit):
                 var_i_inv = np.linalg.inv(var_i)
             except np.linalg.LinAlgError:
                 var_i_inv = np.linalg.pinv(var_i)
-
 
             z_i = eta[i] + var_i_inv @ (yi - pi)  # (J-1)
 
