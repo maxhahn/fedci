@@ -31,13 +31,10 @@ class RegressionTest():
         except np.linalg.LinAlgError:
             xwx_inv = np.linalg.pinv(xwx)
 
-        if OVR == 0 and len(self.beta) > len(self.X_labels)+1:
-           self.beta = self.beta - xwx_inv @ xwz
+        if RIDGE > 0:
+            self.beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
         else:
-            if RIDGE > 0:
-                self.beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
-            else:
-                self.beta = xwx_inv @ xwz
+            self.beta = xwx_inv @ xwz
 
     def __lt__(self, other):
         if len(self.X_labels) < len(other.X_labels): return True

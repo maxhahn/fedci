@@ -109,59 +109,67 @@ class BinaryComputationUnit(ComputationUnit):
 
 class CategoricalComputationUnit(ComputationUnit):
     @staticmethod
-    def compute(data, y_label, X_labels, betas):
+    def compute(data, y_label, X_labels, beta):
+        assert len(beta) == 1, 'Multinomial regression called with more than one beta'
+        beta = beta[y_label]
+
+        # Identify the dummy columns for the response
+        y_dummy_columns = [c for c in data.columns if c.startswith(f'{y_label}__cat__')]
+
+        # Design matrix
         X = data.to_pandas()[sorted(X_labels)]
         X['__const'] = 1
         X = X.to_numpy().astype(float)
 
-        models = {}
-        for category in betas.keys():
-            y = data.to_pandas()[category]
-            y = y.to_numpy().astype(float)
+        num_categories = len(y_dummy_columns)  # J
+        num_features = len(X_labels) + 1       # K
 
-            models[category] = ComputationHelper.get_regression_model(
-                y=y,
-                X=X,
-                beta=betas[category],
-                glm_family=family.Binomial()
-            )
+        def softmax(eta):
+            exp_eta = np.exp(np.hstack([np.zeros((eta.shape[0], 1)), eta]))
+            return exp_eta / exp_eta.sum(axis=1, keepdims=True)
 
-        etas = {c:np.clip(m.predict(which='linear'), -350, 350) for c,m in models.items()}
-        denom = 1 + sum(np.exp(eta) for eta in etas.values())
-        mus = {c:np.clip(np.exp(eta)/denom,1e-15,1-1e-15) for c,eta in etas.items()}
-        dmu_deta = {c:mu*(1-mu) for c,mu in mus.items()}
+        # Response matrix (N x (J-1))
+        Y = data.to_pandas()[y_dummy_columns[1:]].to_numpy()
 
-        results = {}
-        llf = 0
-        llf_saturated = 0
-        reference_category_indices = np.ones(len(data))
-        for category in dmu_deta.keys():
-            y = data.to_pandas()[category]
-            y = y.to_numpy().astype(float)
+        # Reshape beta (K x (J-1))
+        beta = beta.reshape(num_features, -1, order='F')
 
-            reference_category_indices = reference_category_indices * (y==0)
+        # Compute eta and mu
+        eta = X @ beta               # N x (J-1)
+        mu = softmax(eta)            # N x J
+        mu_reduced = mu[:, 1:]       # N x (J-1)
 
-            # beta update
-            z = etas[category] + (y - mus[category])/dmu_deta[category]
-            W = np.diag(dmu_deta[category])
+        # Initialize accumulators for XWX and XWz
+        XWX = np.zeros((num_features * (num_categories - 1), num_features * (num_categories - 1)))
+        XWz = np.zeros(num_features * (num_categories - 1))
 
-            xw = X.T @ W
-            xwx = xw @ X
-            xwz = xw @ z
+        # Construct W blocks and z
+        for i in range(Y.shape[0]):
+            yi = Y[i]  # (J-1)
+            pi = mu_reduced[i]
+            var_i = np.diag(pi) - np.outer(pi, pi)  # (J-1) x (J-1)
 
-            results[category] = {'xwx': xwx, 'xwz': xwz}
+            try:
+                var_i_inv = np.linalg.inv(var_i)
+            except np.linalg.LinAlgError:
+                var_i_inv = np.linalg.pinv(var_i)
 
-            # LLF
-            llf += np.sum(np.log(np.take(mus[category], np.nonzero(y)[0])))
-            ## LLF SATURATED (for deviance)
-            #llf_saturated += np.sum(y * np.log(np.clip(y, 1e-10, None)))
 
-        # LLF
-        llf += np.sum(np.log(np.take(1/denom, reference_category_indices.nonzero()[0])))
+            z_i = eta[i] + var_i_inv @ (yi - pi)  # (J-1)
 
-        ## LLF SATURATED (for deviance)
-        #llf_saturated += np.sum(reference_category_indices * np.log(np.clip(reference_category_indices, 1e-10, None)))
-        deviance = 2 * (llf_saturated - llf)
+            # Compute local contributions to XWX and XWz
+            Xi = np.kron(np.eye(num_categories - 1), X[i:i+1])  # (J-1)*K x K
+            Wi = var_i  # (J-1) x (J-1)
+            XWX += Xi.T @ Wi @ Xi
+            XWz += Xi.T @ Wi @ z_i
+
+        # Compute log-likelihood and deviance
+        Y_full = data.to_pandas()[y_dummy_columns].to_numpy()  # N x J
+        logprob = np.log(np.clip(mu, 1e-8, 1))
+        llf = np.sum(Y_full * logprob)
+        deviance = -2 * llf
+
+        results = {y_label: {'xwx': XWX, 'xwz': XWz}}
 
         return {
             'llf': llf,

@@ -1,10 +1,9 @@
-from re import A
-
 from holoviews.core.ndmapping import asdim
 from scipy.sparse.linalg._eigen.lobpcg.lobpcg import LinAlgError
 from .utils import VariableType, ClientResponseData, BetaUpdateData
 import polars as pl
 import numpy as np
+import scipy
 
 from typing import Dict, List
 
@@ -108,208 +107,66 @@ class BinaryComputationUnit(ComputationUnit):
 class CategoricalComputationUnit(ComputationUnit):
     @staticmethod
     def compute(data, y_label, X_labels, beta):
-        assert len(beta) == 1, 'Running multinomial regression requires usage of a single beta'
+        assert len(beta) == 1, 'Multinomial regression called with more than one beta'
         beta = beta[y_label]
+
+        # Identify the dummy columns for the response
         y_dummy_columns = [c for c in data.columns if c.startswith(f'{y_label}__cat__')]
 
+        # Design matrix
         X = data.to_pandas()[sorted(X_labels)]
         X['__const'] = 1
         X = X.to_numpy().astype(float)
 
-        num_categories = len(y_dummy_columns) # J = num_classes
-        num_features = len(X_labels)+1 # K = num_features
+        num_categories = len(y_dummy_columns)  # J
+        num_features = len(X_labels) + 1       # K
 
-        def cdf(X_data):
-            X_data = np.clip(X_data, -350, 350)
-            eXB = np.column_stack((np.ones(len(X_data)), np.exp(X_data)))
-            return eXB/eXB.sum(1)[:,None]
+        def softmax(eta):
+            exp_eta = np.exp(np.hstack([np.zeros((eta.shape[0], 1)), eta]))
+            return exp_eta / exp_eta.sum(axis=1, keepdims=True)
 
-        def hess(beta):
-            beta = beta.reshape(num_features, -1, order='F') # reshape (K*J,) -> (K, J)
+        # Response matrix (N x (J-1))
+        Y = data.to_pandas()[y_dummy_columns[1:]].to_numpy()
 
-            pr = cdf(np.dot(X,beta)) # (num_samples, num_features) @ (num_features, num_cats) -> (num_samples, num_cats)
-            pr = np.clip(pr, 1e-8, 1)
-            partials = []
-            for i in range(1,num_categories):
-                for j in range(1,num_categories): # this loop assumes we drop the first col.
-                    weight = (pr[:,i]*((1 if i==j else 0)-pr[:,j]))[:,None]
-                    partials.append(-(np.dot((weight*X).T, X)))
+        # Reshape beta (K x (J-1))
+        beta = beta.reshape(num_features, -1, order='F')
 
-            H = np.array(partials)
-            #print(H.shape, partials[0].shape, num_categories, num_features)
-            # the developer's notes on multinomial should clear this math up
-            H = np.transpose(H.reshape(
-                num_categories-1, num_categories-1, num_features, num_features), (0, 2, 1, 3)
-            ).reshape(
-                (num_categories-1)*num_features, (num_categories-1)*num_features
-            )
-            return H
+        # Compute eta and mu
+        eta = X @ beta               # N x (J-1)
+        mu = softmax(eta)            # N x J
+        mu_reduced = mu[:, 1:]       # N x (J-1)
 
-        def hess2(beta):
-            beta = beta.reshape(num_features, -1, order='F') # reshape (K*J,) -> (K, J)
+        # Initialize accumulators for XWX and XWz
+        XWX = np.zeros((num_features * (num_categories - 1), num_features * (num_categories - 1)))
+        XWz = np.zeros(num_features * (num_categories - 1))
 
-            pr = cdf(np.dot(X,beta)) # (num_samples, num_features) @ (num_features, num_cats) -> (num_samples, num_cats)
-            pr = np.clip(pr, 1e-8, 1)
-            weights = []
-            for i in range(1,num_categories):
-                for j in range(1,num_categories): # this loop assumes we drop the first col.
-                    weight = (pr[:,i]*((1 if i==j else 0)-pr[:,j]))[:,None]
-                    weights.append(np.broadcast_to(weight, X.shape))
+        # Construct W blocks and z
+        for i in range(Y.shape[0]):
+            yi = Y[i]  # (J-1)
+            pi = mu_reduced[i]
+            var_i = np.diag(pi) - np.outer(pi, pi)  # (J-1) x (J-1)
 
-            W = np.array(weights)
-
-            XW = X*W
-            XW = np.transpose(XW, (0,2,1))
-
-            XWX = -np.dot(XW, X)
-            XWX = np.transpose(XWX.reshape(
-                num_categories-1, num_categories-1, num_features, num_features), (0, 2, 1, 3)
-            ).reshape(
-                (num_categories-1)*num_features, (num_categories-1)*num_features
-            )
-            return XWX
-
-        def hessx(beta):
-            beta = beta.reshape(num_features, -1, order='F') # reshape (K*J,) -> (K, J)
-
-            pr = cdf(np.dot(X,beta)) # (num_samples, num_features) @ (num_features, num_cats) -> (num_samples, num_cats)
-            pr = np.clip(pr, 1e-8, 1)
-
-            derivs = []
-            for i in range(1,num_categories):
-                for j in range(1,num_categories): # this loop assumes we drop the first col.
-                    deriv = (pr[:,i]*((1 if i==j else 0)-pr[:,j]))
-                    derivs.append(np.diag(deriv))
-
-            W = np.array(derivs)
-
-            XW = np.transpose(W@X, (0,2,1))
-
-            XWX = -np.dot(XW, X)
-            XWX = np.transpose(XWX.reshape(
-                num_categories-1, num_categories-1, num_features, num_features), (0, 2, 1, 3)
-            ).reshape(
-                (num_categories-1)*num_features, (num_categories-1)*num_features
-            )
-            return XWX
-
-        def score(beta):
-            y = data.to_pandas()[y_dummy_columns[1:]].to_numpy()
-            beta = beta.reshape(num_features, -1, order='F')
-            firstterm = (y - cdf(np.dot(X,beta))[:,1:])
-            score_vec = np.dot(firstterm.T, X).flatten()
-            # ADD ETA TO FIRSTTERM SO THAT CLIENT AGGREGATION IS STREAMLINED AND XWz is passed over network
-            return score_vec
-
-        def score2(beta):
-            y = data.to_pandas()[y_dummy_columns].to_numpy()
-            beta = beta.reshape(num_features, -1, order='F')
-
-            eta = np.dot(X,beta)
-            pr = cdf(eta)
-            pr = np.clip(pr, 1e-8, 1)
-
-            dmu_deta = pr[:,1:]*(1 -pr[:,1:])
-            dmu_deta = np.clip(dmu_deta, 1e-8,1)
-
-            z = eta + (y[:,1:] - pr[:,1:])/dmu_deta
-
-            W = dmu_deta
-            Wz = W*z
-
-            XWz = np.dot(X.T, z)
-            XWz = XWz.flatten()
-
-            return XWz
-
-        def scorex(beta):
-            y = data.to_pandas()[y_dummy_columns].to_numpy()
-            beta = beta.reshape(num_features, -1, order='F')
-
-            eta = np.dot(X,beta)
-            pr = cdf(eta)
-            pr = np.clip(pr, 1e-8, 1)
-
-            #eta = np.hstack([np.zeros((eta.shape[0], 1)), eta])
-
-            dmu_deta = pr[:,1:]*(1 -pr[:,1:])
-            dmu_deta = np.clip(dmu_deta, 1e-8,1)
-
-            n_samples = X.shape[0]
-            n_classes = num_categories
-
-            W = np.zeros((n_samples, n_classes-1, n_classes-1))
-            for i in range(n_samples):
-                p = pr[i,1:]
-                W[i] = np.diag(p) - np.outer(p, p)  # Covariance structure
-
-            # Compute working response z
-            y_minus_pr = y[:,1:] - pr[:,1:]  # (n_samples, n_classes)
-            z = np.zeros_like(eta)
-            for i in range(n_samples):
-                dmu_deta_inv = np.linalg.pinv(W[i])  # Inverse of Cov(pr)
-                #print(z.shape, eta.shape, dmu_deta_inv.shape, y_minus_pr[i].shape)
-                z[i] = eta[i] + np.dot(dmu_deta_inv, y_minus_pr[i])
-
-            Wz = np.zeros((n_samples, num_categories-1))
-            print(Wz[0].shape, X[0].shape, W[0].shape, z[0].shape)
-            for i in range(n_samples):
-                Wz[i] = W[i] @ z[i]
-
-            print(Wz.sum(axis=0).shape, X.shape)
-            XWz = np.dot(X.T, Wz).T#.sum(axis=0))  # Combine for all samples
-            print(XWz.shape)
-            return XWz.flatten()
+            try:
+                var_i_inv = np.linalg.inv(var_i)
+            except np.linalg.LinAlgError:
+                var_i_inv = np.linalg.pinv(var_i)
 
 
-        def score3(beta):
-            y = data.to_pandas()[y_dummy_columns].to_numpy()
-            beta = beta.reshape(num_features, -1, order='F')
+            z_i = eta[i] + var_i_inv @ (yi - pi)  # (J-1)
 
-            eta = np.dot(X,beta)
-            pr = cdf(eta)
-            pr = np.clip(pr, 1e-8, 1)
+            # Compute local contributions to XWX and XWz
+            Xi = np.kron(np.eye(num_categories - 1), X[i:i+1])  # (J-1)*K x K
+            Wi = var_i  # (J-1) x (J-1)
+            XWX += Xi.T @ Wi @ Xi
+            XWz += Xi.T @ Wi @ z_i
 
-            dmu_deta = pr[:,1:]*(1 -pr[:,1:])
-            dmu_deta = np.clip(dmu_deta, 1e-8,1)
+        # Compute log-likelihood and deviance
+        Y_full = data.to_pandas()[y_dummy_columns].to_numpy()  # N x J
+        logprob = np.log(np.clip(mu, 1e-8, 1))
+        llf = np.sum(Y_full * logprob)
+        deviance = -2 * llf
 
-
-            z = eta + (y[:,1:] - pr[:,1:])/dmu_deta
-
-            a = dmu_deta**2
-            print(np.diag(pr[:,1]).shape, np.outer(pr[:,1], pr[:,1]).shape)
-            b = 1/(np.diag(pr[:,1])-np.outer(pr[:,1], pr[:,1]))
-            print(a.shape, b.shape)
-            W = a @ b
-            Wz = W*z
-
-            XWz = np.dot(X.T, z)
-            XWz = XWz.flatten()
-
-            firstterm = (y[:,1:] - pr[:,1:]) / dmu_deta
-            score_vec = np.dot(firstterm.T, X).flatten()
-
-            return XWz, dmu_deta, score_vec
-
-        print(f'{y_label} ~ {X_labels}')
-
-        #hess3(beta)
-        h = hessx(beta)
-        s = score(beta)
-
-
-        results = {y_label: {'xwx': h, 'xwz': s}}
-
-        def loglike(beta):
-            y = data.to_pandas()[y_dummy_columns].to_numpy()
-            beta = beta.reshape(num_features, -1, order='F')
-            d = y
-            pr = cdf(np.dot(X,beta))
-            logprob = np.log(np.clip(pr, 1e-8, 1))
-            return np.sum(d * logprob)
-
-        llf = loglike(beta)
-        deviance = -2*llf
+        results = {y_label: {'xwx': XWX, 'xwz': XWz}}
 
         return {
             'llf': llf,
@@ -317,60 +174,6 @@ class CategoricalComputationUnit(ComputationUnit):
             'beta_update_data': results
         }
 
-    @staticmethod
-    def compute_ovr(data, y_label, X_labels, betas):
-        X = data.to_pandas()[sorted(X_labels)]
-        X['__const'] = 1
-        X = X.to_numpy().astype(float)
-
-        models = {}
-        results = {}
-        for category in betas.keys():
-            y = data.to_pandas()[category]
-            y = y.to_numpy().astype(float)
-
-            models[category] = ComputationHelper.get_regression_model(
-                y=y,
-                X=X,
-                beta=betas[category],
-                glm_family=family.Binomial()
-            )
-            current_result = ComputationHelper.run_model(
-                y=y,
-                X=X,
-                model=models[category]
-            )
-            results[category] = {'xwx': current_result['xwx'], 'xwz': current_result['xwz']}
-
-        # calculate multinomial llf
-        etas = {c:np.clip(m.predict(which='linear'), -350, 350) for c,m in models.items()}
-        denom = 1 + sum(np.exp(eta) for eta in etas.values())
-        mus = {c:np.clip(np.exp(eta)/denom, 1e-8, 1-1e-8) for c,eta in etas.items()}
-
-        llf = 0
-        llf_saturated = 0
-        reference_category_indices = np.ones(len(data))
-        for category in betas.keys():
-            y = data.to_pandas()[category].to_numpy().astype(float)
-            mu = mus[category]
-            reference_category_indices = reference_category_indices * (y==0)
-            # LLF
-            llf += np.sum(np.log(np.take(mu, np.nonzero(y)[0])))
-            ## LLF SATURATED (for deviance)
-            #llf_saturated += np.sum(y * np.log(np.clip(y, 1e-10, None)))
-
-        # LLF
-        llf += np.sum(np.log(np.take(1/denom, reference_category_indices.nonzero()[0])))
-
-        # LLF SATURATED (for deviance)
-        #llf_saturated += np.sum(reference_category_indices * np.log(np.clip(reference_category_indices, 1e-10, None)))
-        deviance = 2 * (llf_saturated - llf)
-
-        return {
-            'llf': llf,
-            'deviance': deviance,
-            'beta_update_data': results
-        }
 
 class CategoricalOVRComputationUnit(ComputationUnit):
     @staticmethod
