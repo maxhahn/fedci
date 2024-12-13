@@ -1,43 +1,87 @@
-# Use the official R base image from Docker Hub
-FROM rocker/r-ver:4.4
+# Dockerfile
+FROM docker.io/rocker/r-ver:4.4.0
 
-# ,---.                 ,--.                       ,--------.             ,--.
-# '   .-',--. ,--.,---.,-'  '-. ,---. ,--,--,--.    '--.  .--',---.  ,---. |  | ,---.
-# `.  `-. \  '  /(  .-''-.  .-'| .-. :|        |       |  |  | .-. || .-. ||  |(  .-'
-# .-'    | \   ' .-'  `) |  |  \   --.|  |  |  |       |  |  ' '-' '' '-' '|  |.-'  `)
-# `-----'.-'  /  `----'  `--'   `----'`--`--`--'       `--'   `---'  `---' `--'`----'
-#        `---'
-
-RUN apt update && apt upgrade -y
-
-RUN apt install -y cmake \
+# System dependencies for R packages and rpy2
+RUN apt-get update && apt-get install -y \
+    libxml2-dev \
     libcurl4-openssl-dev \
-    libv8-dev \
+    libssl-dev \
+    libgraphviz-dev \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    graphviz \
+    libpcre2-dev \
+    liblzma-dev \
+    libbz2-dev \
+    libicu-dev \
+    libtirpc-dev \
+    r-base-dev \
+    librsvg2-dev \
+    libcairo2-dev \
+    libgmp-dev \
+    libmpfr-dev \
     libgsl-dev \
-    libmagick++-dev
+    cmake \
+    nano \
+    && rm -rf /var/lib/apt/lists/*
 
-# ,------.     ,------.               ,--.
-# |  .--. '    |  .--. ' ,--,--. ,---.|  |,-. ,--,--. ,---.  ,---.  ,---.
-# |  '--'.'    |  '--' |' ,-.  || .--'|     /' ,-.  || .-. || .-. :(  .-'
-# |  |\  \     |  | --' \ '-'  |\ `--.|  \  \\ '-'  |' '-' '\   --..-'  `)
-# `--' '--'    `--'      `--`--' `---'`--'`--'`--`--'.`-  /  `----'`----'
-#                                                     `---'
+# Install BiocManager and its dependencies first
+RUN R -e "install.packages(c('BiocManager', 'devtools'), repos='http://cran.rstudio.com/')"
 
-# Copy your R project files
+# Install Bioconductor packages
+RUN R -e "BiocManager::install(c('graph', 'Rgraphviz', 'RBGL'), ask=FALSE)"
+
+# Install base dependencies first
+RUN R -e "\
+    install.packages(c('ggm', 'sfsmisc', 'gmp', 'abind', 'corpcor', 'Rmpfr', 'V8'), \
+    repos='http://cran.rstudio.com/', \
+    dependencies=TRUE)"
+
+# Install pcalg and its dependencies
+RUN R -e "\
+    install.packages('pcalg', \
+    repos='http://cran.rstudio.com/', \
+    dependencies=TRUE)"
+
+# Install rsvg and MXM with dependencies
+RUN R -e "\
+    install.packages(c('rsvg', 'MXM'), \
+    repos='http://cran.rstudio.com/', \
+    dependencies=TRUE)"
+
+# Install remaining R packages from requirements.r
+COPY requirements.r /tmp/requirements.r
+RUN R -e "packages <- readLines('/tmp/requirements.r'); \
+    installed_packages <- installed.packages()[,'Package']; \
+    packages <- setdiff(packages, installed_packages); \
+    if(length(packages) > 0) { \
+        install.packages(packages, \
+        repos='http://cran.rstudio.com/', \
+        dependencies=TRUE) \
+    }"
+
+COPY install_mxm.r /tmp/install_mxm.r
+RUN Rscript /tmp/install_mxm.r
+
+# Install Python dependencies
+RUN python3 -m pip install --upgrade pip setuptools wheel
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+
+# Copy project data
 COPY ./rIOD /rIOD
 WORKDIR /rIOD
 
-# install packages
-RUN install2.r -e MXM pscl dagitty DOT rsvg BFF BiocManager
-RUN R -e "BiocManager::install(c('graph', 'RBGL', 'Rgraphviz'))"
-RUN install2.r -e rje pcalg jsonlite lavaan doFuture gtools
+# Install FCI Utils
+RUN R CMD INSTALL /rIOD/imports/FCI.Utils_1.0.tar.gz
 
-# install FCI Utils
-RUN R CMD INSTALL imports/FCI.Utils_1.0.tar.gz
+# Build and install rIOD package
+RUN R CMD build /rIOD
+RUN R CMD INSTALL /rIOD/rIOD_1.0.tar.gz
 
-# build and install rIOD package
-RUN R CMD build .
-RUN R CMD INSTALL rIOD_1.0.tar.gz
+WORKDIR /
+RUN rm -r /rIOD
 
 # ,------.            ,--.  ,--.                        ,------.               ,--.
 # |  .--. ',--. ,--.,-'  '-.|  ,---.  ,---. ,--,--,     |  .--. ' ,--,--. ,---.|  |,-. ,--,--. ,---.  ,---.  ,---.
@@ -49,10 +93,7 @@ RUN R CMD INSTALL rIOD_1.0.tar.gz
 COPY ./app /app
 WORKDIR /app
 
-# get pip
-RUN apt install -y pip
-# Python packages
-RUN python3 -m pip install --upgrade pip setuptools wheel
+# More Python packages
 RUN pip install pandas polars graphviz rpy2 litestar[standard] streamlit extra-streamlit-components streamlit-extras streamlit-autorefresh
 RUN pip install statsmodels scipy
 
