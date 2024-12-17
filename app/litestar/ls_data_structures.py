@@ -16,6 +16,7 @@ class Algorithm(str, Enum):
 @dataclass
 class RIODUserData():
     data_labels: List[str]
+    schema: Dict[str, fedci.VariableType]
     data: pd.DataFrame | None
 
 @dataclass
@@ -208,6 +209,7 @@ class RIODDataSubmissionRequest(BasicRequest):
 @dataclass
 class IODExecutionRequest(BasicRequest):
     alpha: float
+    max_conditioning_set: int | None
 
 @dataclass
 class UpdateFEDGLMRequest(BasicRequest):

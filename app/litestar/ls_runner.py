@@ -59,7 +59,7 @@ class AlgorithmController(Controller):
 
         return self.run_riod(zip(participants, participant_data, participant_data_labels), alpha=data.alpha)
 
-    def setup_fedglm(self, room_name):
+    def setup_fedglm(self, room_name, alpha, max_cond_size):
         room = rooms[room_name]
 
         schema = {}
@@ -79,13 +79,17 @@ class AlgorithmController(Controller):
             for feature, levels in conn.provided_data.ordinal_expressions.items():
                 ordinal_expressions[feature] = sorted(list(set(ordinal_expressions.get(feature, [])).union(set(levels))), key=lambda x: int(x.split('__ord__')[-1]))
 
+
         testing_engine = fedci.TestEngine(
             schema=schema,
             category_expressions=category_expressions,
-            ordinal_expressions=ordinal_expressions
+            ordinal_expressions=ordinal_expressions,
+            max_regressors=max_cond_size
         )
+        print('eyo', testing_engine is None)
 
         room.algorithm_state.testing_engine = testing_engine
+        room.algorithm_state.alpha = alpha
         room.algorithm_state.start_of_last_iteration=datetime.datetime.now()
 
         required_labels = testing_engine.get_currently_required_labels()
@@ -151,10 +155,8 @@ class AlgorithmController(Controller):
 
             df = pd.DataFrame(data=rows, columns=columns)
 
-            # TODO: add alpha configuration per request
-            alpha = 0.05
             try:
-                result, result_labels, _, _ = self.run_riod([(None, df, all_labels)], alpha=alpha)
+                result, result_labels, _, _ = self.run_riod([(None, df, all_labels)], alpha=room.algorithm_state.alpha)
             except:
                 raise HTTPException(detail='Failed to execute FCI', status_code=500)
 
@@ -220,7 +222,7 @@ class AlgorithmController(Controller):
             room.is_finished = True
             rooms[room_name] = room
         elif room.algorithm == Algorithm.FEDERATED_GLM:
-            self.setup_fedglm(room_name)
+            self.setup_fedglm(room_name, data.alpha, data.max_conditioning_set)
         else:
             raise Exception(f'Encountered unknown algorithm {room.algorithm}')
 

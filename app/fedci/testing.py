@@ -3,10 +3,16 @@ import numpy as np
 from typing import List, Dict
 from itertools import chain, combinations
 
-from .env import EXPAND_ORDINALS, RIDGE
+from .env import EXPAND_ORDINALS, RIDGE, OVR
 from .utils import BetaUpdateData, ClientResponseData, VariableType
 
 class RegressionTest():
+    @classmethod
+    def create_and_overwrite_beta(cls, y_label, X_labels, beta):
+        c = cls(y_label, X_labels)
+        c.beta = beta
+        return c
+
     def __init__(self, y_label: str, X_labels: List[str]):
         self.y_label = y_label
         self.X_labels = X_labels

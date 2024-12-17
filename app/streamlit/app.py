@@ -106,6 +106,11 @@ if '_local_alpha_value' not in st.session_state:
 if '_max_conditioning_set_cardinality' not in st.session_state:
     st.session_state['_max_conditioning_set_cardinality'] = 1
 
+if 'max_conditioning_set' not in st.session_state:
+    st.session_state['max_conditioning_set'] = 1
+if '_max_conditioning_set' not in st.session_state:
+    st.session_state['_max_conditioning_set'] = 1
+
 if 'uploaded_data' not in st.session_state:
     st.session_state['uploaded_data'] = None
 if 'uploaded_data' not in st.session_state:
@@ -674,7 +679,8 @@ def step_show_room_details():
 
     st.write(f"<sup>Room protocol: {room['algorithm']}<sup>", unsafe_allow_html=True)
     if room['algorithm'] == 'FEDGLM' and room['is_processing']:
-        st.write(f"<sup>Currently running: {room['algorithm_info']['y_label']} ~ {','.join(room['algorithm_info']['X_labels'] + ['1'])}<sup>", unsafe_allow_html=True)
+        current_x_labels = sorted(list(set([l.split('__cat__')[0].split('__ord__')[0] for l in room['algorithm_info']['X_labels']])))
+        st.write(f"<sup>Currently running: {room['algorithm_info']['y_label']} ~ {','.join(current_x_labels + ['1'])}<sup>", unsafe_allow_html=True)
     #spinner_placeholder = st.empty()
 
     _, col1, col2, col3, col4, col5, _ = st.columns((1,1,1,1,1,1,1))
@@ -737,7 +743,8 @@ def step_show_room_details():
     if col5.button(':fire:', help='Run IOD on participant data', disabled=st.session_state['username']!=room['owner_name'], use_container_width=True):
         r = post_to_server(url = f'{st.session_state["server_url"]}/run/{room["name"]}', payload={'id': st.session_state['server_provided_user_id'],
                                                                                  'username': st.session_state['username'],
-                                                                                 'alpha': round(st.session_state['alpha_value'],2)
+                                                                                 'alpha': round(st.session_state['alpha_value'],2),
+                                                                                 'max_conditioning_set': st.session_state['max_conditioning_set']
                                                                                  })
         if r is None:
             return
@@ -751,7 +758,10 @@ def step_show_room_details():
         st.session_state['_alpha_value'] = st.session_state['alpha_value']
 
     # Run config
-    _, col1, _ = st.columns((1,5,1))
+    if room['algorithm'] == 'FEDGLM':
+        _, col1, col2, _ = st.columns((1,3,3,1))
+    else:
+        _, col1, _ = st.columns((1,5,1))
     col1.number_input('Select alpha value:',
                       value=st.session_state['_alpha_value'],
                       min_value=0.0,
@@ -760,6 +770,17 @@ def step_show_room_details():
                       key='alpha_value',
                       format='%.2f',
                       on_change=change_alpha_value)
+    if room['algorithm'] == 'FEDGLM':
+        def change_max_conditioning_set():
+            st.session_state['_max_conditioning_set'] = st.session_state['max_conditioning_set']
+        col2.number_input('Select max conditioning set size:',
+                          value=st.session_state['_max_conditioning_set'],
+                          min_value=1,
+                          max_value=999,
+                          step=1,
+                          key='max_conditioning_set',
+                          on_change=change_max_conditioning_set)
+    st.empty()
 
     col_structure = (1,3,3,1)
     room_fields = ['№', 'Name', 'Provided Labels', 'Action']
