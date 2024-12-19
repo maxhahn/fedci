@@ -205,6 +205,7 @@ def get_riod_tests(data, max_regressors=None, test_targets=None):
         if x > y:
             x,y = y,x
         s = [str(labels[r-1]) for r in row[2] if r is not None]
+        s = sorted(s)
         pval = row[3]
         ground_truth_tests.append(EmptyLikelihoodRatioTest(x, y, s, pval))
 
@@ -215,7 +216,6 @@ def get_riod_tests(data, max_regressors=None, test_targets=None):
 
 def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_truth_tests: List[SymmetricLikelihoodRatioTest], test_targets):
     assert len(tests) == len(ground_truth_tests), f'Number of tests do not match: {len(tests)} != {len(ground_truth_tests)}'
-
     p_values = []
     for test, gt_test in zip(sorted(tests), sorted(ground_truth_tests)):
         if test != gt_test:

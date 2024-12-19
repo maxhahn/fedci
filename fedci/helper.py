@@ -16,16 +16,31 @@ from .env import DEBUG, EXPAND_ORDINALS, LOG_R, LR, RIDGE
 
 import rpy2.rinterface_lib.callbacks as cb
 
-def partition_dataframe(df, n):
+def partition_dataframe(df, n, partition_ratios):
+    assert partition_ratios is None or (sum(partition_ratios) == 1 and len(partition_ratios) == n), 'Malformed partition_ratios'
+
     total_rows = len(df)
-    partition_size = math.ceil(total_rows / n)
 
     partitions = []
-    for i in range(n):
-        start_idx = i * partition_size
-        end_idx = min((i + 1) * partition_size, total_rows)
-        partition = df[start_idx:end_idx]
-        partitions.append(partition)
+    if partition_ratios is None:
+        partition_size = math.ceil(total_rows / n)
+
+        for i in range(n):
+            start_idx = i * partition_size
+            end_idx = min((i + 1) * partition_size, total_rows)
+            partition = df[start_idx:end_idx]
+            partitions.append(partition)
+    else:
+        partition_offsets = [int(sr*total_rows) for sr in partition_ratios]
+        partition_offsets = [0] + partition_offsets
+
+        client_data = []
+        for i in range(n):
+            split_offset = partition_offsets[i]
+            split_length = None
+            if i+1 != n:
+                split_length = partition_offsets[i+1] - partition_offsets[i]
+            partitions.append(df.slice(split_offset, split_length))
 
     return partitions
 
@@ -35,7 +50,7 @@ def write_result(result, directory, file):
         f.write(json.dumps(result) + '\n')
         fcntl.flock(f, fcntl.LOCK_UN)
 
-def run_configured_test(config, seed=None):
+def run_configured_test(config, partition_ratios=None, seed=None):
     node_collection, num_samples, num_clients, target_directory, target_file, test_targets = config
     if not os.path.exists(target_directory) and not (DEBUG >= 1):
         os.makedirs(target_directory, exist_ok=True)
@@ -46,6 +61,7 @@ def run_configured_test(config, seed=None):
                     target_directory=target_directory,
                     target_file=target_file,
                     test_targets=test_targets,
+                    partition_ratios=partition_ratios,
                     seed=seed
                     )
 
@@ -56,6 +72,7 @@ def run_test(dgp_nodes: NodeCollection,
              target_file,
              max_regressors=None,
              test_targets=None,
+             partition_ratios=None,
              seed=None
              ):
     if seed is None:
@@ -70,10 +87,6 @@ def run_test(dgp_nodes: NodeCollection,
     dgp_nodes.reset()
     data = dgp_nodes.get(num_samples)
 
-    #print(data.head())
-
-    #data.write_parquet('error-data-01.parquet')
-
     return run_test_on_data(data,
                             dgp_nodes.name,
                             num_clients,
@@ -81,7 +94,8 @@ def run_test(dgp_nodes: NodeCollection,
                             target_file,
                             max_regressors,
                             seed=seed,
-                            test_targets=test_targets
+                            test_targets=test_targets,
+                            partition_ratios=partition_ratios
                             )
 
 def run_test_on_data(data,
@@ -91,7 +105,8 @@ def run_test_on_data(data,
                      target_file,
                      max_regressors=None,
                      seed=None,
-                     test_targets=None
+                     test_targets=None,
+                     partition_ratios=None
                      ):
     if DEBUG >= 1:
         print("*** Data schema")
@@ -102,7 +117,7 @@ def run_test_on_data(data,
         cb.consolewrite_print = lambda x: None
         cb.consolewrite_warnerror = lambda x: None
 
-    clients = {i:Client(chunk) for i, chunk in enumerate(partition_dataframe(data, num_clients))}
+    clients = {i:Client(chunk) for i, chunk in enumerate(partition_dataframe(data, num_clients, partition_ratios))}
     server = Server(
         clients,
         max_regressors=max_regressors,

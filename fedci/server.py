@@ -42,7 +42,6 @@ class Server():
     def run(self):
         while not self.test_engine.is_finished():
             required_labels = self.test_engine.get_currently_required_labels()
-
             selected_clients = {client_id: client for client_id, client in self.clients.items() if set(required_labels).issubset(self.client_schemas[client_id].keys())}
             assert len(selected_clients) > 0, f'No client is able to provide the data for {required_labels}'
 

@@ -113,7 +113,7 @@ class Test():
         return {t.y_label: t.beta for t in self.tests.values()}
 
     def get_required_labels(self):
-        vars = set(self.y_label)
+        vars = {self.y_label}
         for var in self.X_labels:
             if '__cat__' in var:
                 vars.add(var.split('__cat__')[0])
