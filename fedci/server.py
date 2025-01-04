@@ -55,6 +55,7 @@ class Server():
             print("*** All tests")
             for test in self.test_engine.tests:
                 print(test)
+        return self.test_engine.tests
 
     def get_tests(self):
         return self.test_engine.tests

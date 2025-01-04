@@ -86,7 +86,6 @@ class AlgorithmController(Controller):
             ordinal_expressions=ordinal_expressions,
             max_regressors=max_cond_size
         )
-        print('eyo', testing_engine is None)
 
         room.algorithm_state.testing_engine = testing_engine
         room.algorithm_state.alpha = alpha
@@ -158,7 +157,7 @@ class AlgorithmController(Controller):
             try:
                 result, result_labels, _, _ = self.run_riod([(None, df, all_labels)], alpha=room.algorithm_state.alpha)
             except:
-                raise HTTPException(detail='Failed to execute FCI', status_code=500)
+                raise HTTPException(detail='Failed to execute IOD', status_code=500)
 
             room.result = result
             room.result_labels = result_labels

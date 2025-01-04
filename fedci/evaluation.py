@@ -140,7 +140,7 @@ def get_likelihood_tests(tests: List[Test]):
             likelihood_tests.append(LikelihoodRatioTest(nested_test[0], test))
     return likelihood_tests
 
-def get_symmetric_likelihood_tests(tests, test_targets):
+def get_symmetric_likelihood_tests(tests, test_targets=None):
     symmetric_tests = []
     asymmetric_tests = get_likelihood_tests(tests)
     unique_tests = [t for t in asymmetric_tests if t.x_label < t.y_label]
