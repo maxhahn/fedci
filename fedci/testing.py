@@ -133,6 +133,15 @@ class Test():
         test_title = f'{self.y_label} ~ {",".join(list(set([l.split("__")[0] for l in self.X_labels])))},1'
         return f'Test {test_title} - llf: {self.get_llf()}, deviance: {self.deviance}, {self.iterations}/{self.max_iterations} iterations{test_string}'
 
+    def __eq__(self, other):
+        req_labels = self.get_required_labels()
+        other_labels = other.get_required_labels()
+        return (
+            len(req_labels) == len(other_labels) and
+            self.y_label == other.y_label and
+            tuple(sorted(self.X_labels)) == tuple(sorted(other.X_labels))
+        )
+
     def __lt__(self, other):
         req_labels = self.get_required_labels()
         other_labels = other.get_required_labels()
@@ -151,7 +160,7 @@ class Test():
         elif tuple(sorted(self.X_labels)) > tuple(sorted(other.X_labels)):
             return False
 
-        return True
+        return False
 
 
 class TestEngine():
@@ -166,6 +175,7 @@ class TestEngine():
 
         self.tests = []
         self.max_iterations = max_iterations
+        self.bad_tests = []
 
         variables = set(schema.keys())
         max_conditioning_set_size = min(len(variables)-1, max_regressors) if max_regressors is not None else len(variables)-1
@@ -251,3 +261,10 @@ class TestEngine():
         current_test.update_betas(client_responses)
         if current_test.is_finished():
             self.current_test_index += 1
+
+    def remove_current_test(self):
+        if self.is_finished():
+            return
+        current_test = self.tests[self.current_test_index]
+        self.bad_tests.append(current_test)
+        self.tests = self.tests[:self.current_test_index] + self.tests[self.current_test_index+1:]

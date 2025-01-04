@@ -43,6 +43,9 @@ class Server():
         while not self.test_engine.is_finished():
             required_labels = self.test_engine.get_currently_required_labels()
             selected_clients = {client_id: client for client_id, client in self.clients.items() if set(required_labels).issubset(self.client_schemas[client_id].keys())}
+            if len(selected_clients) == 0:
+                self.test_engine.remove_current_test()
+                continue
             assert len(selected_clients) > 0, f'No client is able to provide the data for {required_labels}'
 
             y_label, X_labels, beta = self.test_engine.get_current_test_parameters()

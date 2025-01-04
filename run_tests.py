@@ -199,28 +199,28 @@ node_collections = [
     nc931, nc932, nc933, nc934, nc935, nc936,
     nc941, nc942, nc943, nc944, nc945, nc946,
     nc951, nc952, nc953, nc954, nc955, nc956,
-    nc961, nc962, nc963, nc964, nc965, nc966,
+    #nc961, nc962, nc963, nc964, nc965, nc966,
 ]
 
 num_samples = [
     100,
-    200, 300, 400,
+    #200, 300, 400,
     500, #600, 700, 800,
-    750,
+    #750,
     #900,
-    1000,
+    #1000,
     #1250,
-    1500,
+    #1500,
     #1750,
-    2000,
+    #2000,
     #2500,
-    3000
+    #3000
 ]
 num_clients = [
     1, 3, 5
 ]
 
-file_info = ('./experiments/base2/', 'tests.ndjson')
+file_info = ('./experiments/tmp3/', 'tests.ndjson')
 
 configurations = list(itertools.product(node_collections, num_samples, num_clients))
 configurations = [c + file_info for c in configurations]
@@ -228,7 +228,7 @@ test_targets_uncon = [('X', 'Y', ())]
 test_targets_con = [('X', 'Y', ('Z',))]
 configurations = [c + (test_targets_uncon,) if 'Unc.' in c[0].name else c + (test_targets_con,) for c in configurations]
 
-num_runs = 100
+num_runs = 5
 
 configurations *= num_runs
 

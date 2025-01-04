@@ -37,7 +37,6 @@ def toposort(variables):
 
     return sorted_list
 
-
 class Node:
     def __init__(self, name, parents=[], **kwargs):
         self.name = name
@@ -141,6 +140,8 @@ class GenericNode(Node):
 class NodeCollection():
     def __init__(self, name, nodes, drop_vars=[]):
         self.name = name
+        if self._has_cycle(nodes):
+            raise Exception('Given nodes form a directed cycle')
         self.nodes = toposort(nodes)
         self.drop_vars = drop_vars
 
@@ -155,3 +156,32 @@ class NodeCollection():
         for node in self.nodes[::-1]:
             node.reset()
         return self
+
+    @staticmethod
+    def _has_cycle(nodes):
+        """
+        Checks if there is a cycle in the graph formed by the given nodes.
+        :param nodes: List of Node instances
+        :return: True if a cycle exists, otherwise False
+        """
+        def has_cycle(node, visited, stack):
+            if node in stack:
+                return True
+            if node in visited:
+                return False
+
+            stack.add(node)
+            for parent in node.parents:
+                if has_cycle(parent, visited, stack):
+                    return True
+
+            stack.remove(node)
+            visited.add(node)
+            return False
+
+        visited = set()
+        for node in nodes:
+            if node not in visited:
+                if has_cycle(node, visited, set()):
+                    return True
+        return False

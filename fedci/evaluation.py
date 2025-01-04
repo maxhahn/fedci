@@ -1,4 +1,3 @@
-
 from .testing import Test
 from .env import DEBUG
 
@@ -92,6 +91,11 @@ class SymmetricLikelihoodRatioTest():
         return f"SymmetricLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val:.4f}\n\t- {self.lrt0}\n\t- {self.lrt1}"
 
     def __lt__(self, other):
+        if len(self.conditioning_set) < len(other.conditioning_set):
+            return True
+        elif len(self.conditioning_set) > len(other.conditioning_set):
+            return False
+
         if self.v0 < other.v0:
             return True
         elif self.v0 > other.v0:
@@ -107,7 +111,7 @@ class SymmetricLikelihoodRatioTest():
         elif tuple(self.conditioning_set) > tuple(other.conditioning_set):
             return False
 
-        return True
+        return False
 
     def __eq__(self, other):
         return self.v0 == other.v0 and self.v1 == other.v1 and self.conditioning_set == other.conditioning_set
@@ -215,16 +219,23 @@ def get_riod_tests(data, max_regressors=None, test_targets=None):
     return ground_truth_tests
 
 def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_truth_tests: List[SymmetricLikelihoodRatioTest], test_targets):
-    assert len(tests) == len(ground_truth_tests), f'Number of tests do not match: {len(tests)} != {len(ground_truth_tests)}'
     p_values = []
-    for test, gt_test in zip(sorted(tests), sorted(ground_truth_tests)):
-        if test != gt_test:
-            raise Exception('Mismatched tests in sorted zip. This should not happen when all tests are present.')
-        if DEBUG >= 2 or (DEBUG >= 1 and test.p_val != gt_test.p_val):
-            print('***')
-            print(f'Ground Truth:\n{gt_test}')
-            print('---')
-            print(f'Prediction:\n{test}')
+    for test in tests:
+        gt_test = [t for t in ground_truth_tests if t == test]
+        assert len(gt_test) == 1, 'Exactly one match expected'
+        gt_test = gt_test[0]
         p_values.append((test.p_val, gt_test.p_val))
-    assert len(p_values) > 0, 'No tests left'
+
+    # assert len(tests) == len(ground_truth_tests), f'Number of tests do not match: {len(tests)} != {len(ground_truth_tests)}'
+    # p_values = []
+    # for test, gt_test in zip(sorted(tests), sorted(ground_truth_tests)):
+    #     if test != gt_test:
+    #         raise Exception('Mismatched tests in sorted zip. This should not happen when all tests are present.')
+    #     if DEBUG >= 2 or (DEBUG >= 1 and test.p_val != gt_test.p_val):
+    #         print('***')
+    #         print(f'Ground Truth:\n{gt_test}')
+    #         print('---')
+    #         print(f'Prediction:\n{test}')
+    #     p_values.append((test.p_val, gt_test.p_val))
+    # assert len(p_values) > 0, 'No tests left'
     return [p_vals[0] for p_vals in p_values], [p_vals[1] for p_vals in p_values]
