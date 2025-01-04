@@ -8,6 +8,7 @@ import copy
 import itertools
 from collections import OrderedDict
 import pandas as pd
+import numpy as np
 
 import dgp
 import fedci
@@ -118,13 +119,14 @@ def pag_to_node_collection(pag):
 
 test_setups = list(zip(truePAGs, subsetsList))
 
-test_setup = test_setups[0]
-nc = pag_to_node_collection(test_setup[0])
+test_setup = test_setups[1]
+pag = test_setup[0]
+nc = pag_to_node_collection(pag)
 client_A_subset = test_setup[1][0]
 client_B_subset = test_setup[1][1]
 
-NUM_SAMPLES = 1000
-CLIENT_A_DATA_FRACTION = 0.2
+NUM_SAMPLES = 20000
+CLIENT_A_DATA_FRACTION = 1.0
 
 data = nc.get(NUM_SAMPLES)
 
@@ -155,17 +157,7 @@ server_coop = fedci.Server(
     }
 )
 
-# import polars as pl
-# data = pl.read_parquet('./app/IOD/client-data/uploaded_files/wicked-data-01.parquet')
-# client_X = fedci.Client(data)
-
-# server_coop =  fedci.Server(
-#     {
-#         "1": client_X
-#     }
-# )
-
-results = server_coop.run()
+results = server_single.run()
 
 likelihood_ratio_tests = fedci.get_symmetric_likelihood_tests(results)
 all_labels = sorted(data.columns)
@@ -181,7 +173,7 @@ for label_combination in label_combinations:
         continue
     #print('MISSING', label_combination)
     l0, l1 = label_combination
-    missing_base_rows.append((0, all_labels.index(l0)+1, all_labels.index(l1)+1,"", 1))
+    missing_base_rows.append((0, all_labels.index(l0)+1, all_labels.index(l1)+1, "", 1))
 rows += missing_base_rows
 
 for test in likelihood_ratio_tests:
@@ -190,31 +182,6 @@ for test in likelihood_ratio_tests:
 
 df = pd.DataFrame(data=rows, columns=columns)
 
-# ### DEL ME START
-# import polars as pl
-# data = pl.read_parquet('./app/IOD/client-data/uploaded_files/wicked-data-01.parquet')
-# client_X = fedci.Client(data)
-
-# server_coop =  fedci.Server(
-#     {
-#         "1": client_X
-#     }
-# )
-
-# results = server_coop.run()
-
-# likelihood_ratio_tests = fedci.get_symmetric_likelihood_tests(results)
-# all_labels2 = sorted(data.columns)
-
-# columns = ('ord', 'X', 'Y', 'S', 'pvalue')
-# rows = []
-# for test in likelihood_ratio_tests:
-#     s_labels_string = ','.join(sorted([str(all_labels.index(l)+1) for l in test.conditioning_set]))
-#     rows.append((len(test.conditioning_set), all_labels.index(test.v0)+1, all_labels.index(test.v1)+1, s_labels_string, test.p_val))
-
-# df2 = pd.DataFrame(data=rows, columns=columns)
-
-# ### DEL ME END
 
 
 def run_riod(df, labels, alpha):
@@ -235,10 +202,14 @@ def run_riod(df, labels, alpha):
 
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
         g_pag_labels = [list(x[1]) for x in result['G_PAG_Label_List'].items()]
+        g_pag_list = [np.array(pag).astype(int).tolist() for pag in g_pag_list]
         return g_pag_list, g_pag_labels
 
 # fedci essentially skips algorithm 1 -> IOD can be called with a single dataset -> user specific information is lost in this approach
 
 r = run_riod(df, all_labels, 0.05)
+for row in pag:
+    print(row)
 print('-'*10)
-print(r)
+for row in r[0][0]:
+    print(row)

@@ -20,6 +20,7 @@ from typing import Set
 class AlgorithmController(Controller):
     path = '/run'
 
+    # TODO: Missing ord0 rows need to be added with p value 0! (see algorithm 1 of tillman and sprites 2011)
     def run_riod(self, data, alpha):
         users = []
 
