@@ -81,6 +81,11 @@ def pag_to_node_collection(pag):
         )
         return nc
 
+
+    # TODO: AVOID - NEW COLLIDERS
+    #             - CYCLES           (done)
+    #             - UNDIRECTED EDGES (done)
+
     # Fix odot to odot edges by trying both
     def get_options_for_odot_edges(pag):
         pags = []
@@ -119,14 +124,14 @@ def pag_to_node_collection(pag):
 
 test_setups = list(zip(truePAGs, subsetsList))
 
-test_setup = test_setups[1]
+test_setup = test_setups[2]
 pag = test_setup[0]
 nc = pag_to_node_collection(pag)
 client_A_subset = test_setup[1][0]
 client_B_subset = test_setup[1][1]
 
-NUM_SAMPLES = 20000
-CLIENT_A_DATA_FRACTION = 1.0
+NUM_SAMPLES = 2000
+CLIENT_A_DATA_FRACTION = 0.2
 
 data = nc.get(NUM_SAMPLES)
 
@@ -182,8 +187,6 @@ for test in likelihood_ratio_tests:
 
 df = pd.DataFrame(data=rows, columns=columns)
 
-
-
 def run_riod(df, labels, alpha):
     ro.r['source']('./aggregation.r')
     aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
@@ -213,3 +216,61 @@ for row in pag:
 print('-'*10)
 for row in r[0][0]:
     print(row)
+
+
+shd = 0
+tp = 0
+fp = 0
+tn = 0
+fn = 0
+correct_edges = 0
+other = 0
+for i in range(len(pag)):
+    for j in range(i, len(pag)):
+        true_edge_start = pag[i][j]
+        true_edge_end = pag[j][i]
+
+        assert (true_edge_start != 0 and true_edge_end != 0) or true_edge_start == true_edge_end, 'Missing edges need to be symmetric'
+
+        # TODO: this needs to happen for all results of the IOD not just r[0]
+        pred_pag = r[0][0]
+        pred_edge_start = pred_pag[i][j]
+        pred_edge_end = pred_pag[j][i]
+
+        assert (pred_edge_start != 0 and pred_edge_end != 0) or pred_edge_start == pred_edge_end, 'Missing edges need to be symmetric'
+
+        # Missing edge in both
+        if true_edge_start == 0 and pred_edge_start == 0:
+            tn += 1
+            continue
+
+        # False Positive
+        if true_edge_start == 0 and pred_edge_start != 0:
+            fp += 1
+            shd += 1
+            continue
+
+        # False Negative
+        if true_edge_start != 0 and pred_edge_start == 0:
+            fn += 1
+            shd += 1
+            continue
+        # True Positive
+        if true_edge_start != 0 and pred_edge_start != 0:
+            tp += 1
+            continue
+
+        # Same edge in both
+        if true_edge_start == pred_edge_start and true_edge_end == pred_edge_end:
+            correct_edges += 1
+            continue
+
+        other += 1
+        shd += 1
+
+false_discovery_rate = fp/(fp+tp)
+false_omission_rate = fn/(fn+tn)
+
+print(f'{shd=}, {tp=}, {tn=}, {fp=}, {fn=}, {other=}')
+print(f'{false_discovery_rate=}')
+print(f'{false_omission_rate=}')
