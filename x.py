@@ -5,13 +5,21 @@ from rpy2.robjects import pandas2ri
 import string
 import random
 import copy
+import json
 import itertools
+from pathlib import Path
 from collections import OrderedDict
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 
 import dgp
 import fedci
+
+# supress R log
+import rpy2.rinterface_lib.callbacks as cb
+cb.consolewrite_print = lambda x: None
+cb.consolewrite_warnerror = lambda x: None
 
 ro.r['source']('./load_pags.r')
 load_pags = ro.globalenv['load_pags']
@@ -82,12 +90,12 @@ def pag_to_node_collection(pag):
         return nc
 
 
-    # TODO: AVOID - NEW COLLIDERS
+    # TODO: AVOID - NEW COLLIDERS    (done)
     #             - CYCLES           (done)
     #             - UNDIRECTED EDGES (done)
 
     # Fix odot to odot edges by trying both
-    def get_options_for_odot_edges(pag):
+    def get_options_for_odot_edges(true_pag, pag):
         pags = []
         for i in range(len(pag)):
             for j in range(i, len(pag)):
@@ -97,16 +105,30 @@ def pag_to_node_collection(pag):
                 marker_2 = pag[j][i]
 
                 if marker_1 == 1 and marker_2 == 1:
-                    _pag_1 = copy.deepcopy(pag)
-                    _pag_2 = copy.deepcopy(pag)
-                    _pag_1[i][j] = 2
-                    _pag_2[j][i] = 2
-                    pags.extend(get_options_for_odot_edges(_pag_1))
-                    pags.extend(get_options_for_odot_edges(_pag_2))
+                    pag_array = np.array(pag)
+                    _pag_1 = pag_array.copy()
+                    if np.sum((_pag_1[:,j] == 2) * (true_pag[:,j] == 1)) == 0:
+                        _pag_1[i,j] = 2
+                        _pag_1[j,i] = 3
+                        pags.extend(get_options_for_odot_edges(true_pag, _pag_1.tolist()))
+
+                    _pag_2 = pag_array.copy()
+                    if np.sum((_pag_2[:,i] == 2) * (true_pag[:,i] == 1)) == 0:
+                        _pag_2[i,j] = 3
+                        _pag_2[j,i] = 2
+                        pags.extend(get_options_for_odot_edges(true_pag, _pag_2.tolist()))
+
+                    _pag_3 = pag_array.copy()
+                    if (np.sum((_pag_3[:,i] == 2) * (true_pag[:,i] == 1)) == 0) and \
+                        (np.sum((_pag_3[:,j] == 2) * (true_pag[:,j] == 1)) == 0):
+                        _pag_3[i,j] = 2
+                        _pag_3[j,i] = 2
+                        pags.extend(get_options_for_odot_edges(true_pag, _pag_3.tolist()))
+
                     return pags
         return [pag]
 
-    pags = get_options_for_odot_edges(pag)
+    pags = get_options_for_odot_edges(np.array(copy.deepcopy(pag)), copy.deepcopy(pag))
     ncs = []
     for pag in pags:
         try:
@@ -118,74 +140,64 @@ def pag_to_node_collection(pag):
     nc = random.choice(ncs)
     return nc.reset()
 
-# TODO: create node collection from scratch every time to avoid always same structure for double odot edges
-#ncs = [pag_to_node_collection(pag) for pag in truePAGs]
-
-
 test_setups = list(zip(truePAGs, subsetsList))
-
-test_setup = test_setups[2]
-pag = test_setup[0]
-nc = pag_to_node_collection(pag)
-client_A_subset = test_setup[1][0]
-client_B_subset = test_setup[1][1]
 
 NUM_SAMPLES = 2000
 CLIENT_A_DATA_FRACTION = 0.2
 
-data = nc.get(NUM_SAMPLES)
+def setup_servers(test_setup):
+    pag = test_setup[0]
+    nc = pag_to_node_collection(pag)
+    client_A_subset = test_setup[1][0]
+    client_B_subset = test_setup[1][1]
 
-split_point = int(CLIENT_A_DATA_FRACTION*NUM_SAMPLES)
-client_A_data = data[:split_point].select(client_A_subset)
-client_B_data = data[split_point:].select(client_B_subset)
+    data = nc.get(NUM_SAMPLES)
 
-client_A = fedci.Client(client_A_data)
-client_B = fedci.Client(client_B_data)
+    split_point = int(CLIENT_A_DATA_FRACTION*NUM_SAMPLES)
+    client_A_data = data[:split_point].select(client_A_subset)
+    client_B_data = data[split_point:].select(client_B_subset)
 
-## This can not be done, because it doesnt work with missing data
-# server_full_data =  fedci.Server(
-#     {
-#         "1": fedci.Client(data)
-#     }
-# )
+    client_A = fedci.Client(client_A_data)
+    client_B = fedci.Client(client_B_data)
 
-server_single =  fedci.Server(
-    {
-        "1": client_A
-    }
-)
+    server_single =  fedci.Server(
+        {
+            "1": client_A
+        }
+    )
 
-server_coop = fedci.Server(
-    {
-        "1": client_A,
-        "2": client_B
-    }
-)
+    server_coop = fedci.Server(
+        {
+            "1": client_A,
+            "2": client_B
+        }
+    )
 
-results = server_single.run()
+    return (pag, sorted(data.columns)), (server_single, server_coop)
 
-likelihood_ratio_tests = fedci.get_symmetric_likelihood_tests(results)
-all_labels = sorted(data.columns)
+def server_results_to_dataframe(labels, results):
+    likelihood_ratio_tests = fedci.get_symmetric_likelihood_tests(results)
 
-columns = ('ord', 'X', 'Y', 'S', 'pvalue')
-rows = []
+    columns = ('ord', 'X', 'Y', 'S', 'pvalue')
+    rows = []
 
-lrt_ord_0 = [(lrt.v0, lrt.v1) for lrt in likelihood_ratio_tests if len(lrt.conditioning_set) == 0]
-label_combinations = itertools.combinations(all_labels, 2)
-missing_base_rows = []
-for label_combination in label_combinations:
-    if label_combination in lrt_ord_0:
-        continue
-    #print('MISSING', label_combination)
-    l0, l1 = label_combination
-    missing_base_rows.append((0, all_labels.index(l0)+1, all_labels.index(l1)+1, "", 1))
-rows += missing_base_rows
+    lrt_ord_0 = [(lrt.v0, lrt.v1) for lrt in likelihood_ratio_tests if len(lrt.conditioning_set) == 0]
+    label_combinations = itertools.combinations(labels, 2)
+    missing_base_rows = []
+    for label_combination in label_combinations:
+        if label_combination in lrt_ord_0:
+            continue
+        #print('MISSING', label_combination)
+        l0, l1 = label_combination
+        missing_base_rows.append((0, labels.index(l0)+1, labels.index(l1)+1, "", 1))
+    rows += missing_base_rows
 
-for test in likelihood_ratio_tests:
-    s_labels_string = ','.join(sorted([str(all_labels.index(l)+1) for l in test.conditioning_set]))
-    rows.append((len(test.conditioning_set), all_labels.index(test.v0)+1, all_labels.index(test.v1)+1, s_labels_string, test.p_val))
+    for test in likelihood_ratio_tests:
+        s_labels_string = ','.join(sorted([str(labels.index(l)+1) for l in test.conditioning_set]))
+        rows.append((len(test.conditioning_set), labels.index(test.v0)+1, labels.index(test.v1)+1, s_labels_string, test.p_val))
 
-df = pd.DataFrame(data=rows, columns=columns)
+    df = pd.DataFrame(data=rows, columns=columns)
+    return df
 
 def run_riod(df, labels, alpha):
     ro.r['source']('./aggregation.r')
@@ -199,7 +211,6 @@ def run_riod(df, labels, alpha):
         od = OrderedDict(d)
         lv = ro.ListVector(od)
         lvs.append(lv)
-        print(lvs)
 
         result = aggregate_ci_results_f(lvs, alpha)
 
@@ -208,69 +219,154 @@ def run_riod(df, labels, alpha):
         g_pag_list = [np.array(pag).astype(int).tolist() for pag in g_pag_list]
         return g_pag_list, g_pag_labels
 
-# fedci essentially skips algorithm 1 -> IOD can be called with a single dataset -> user specific information is lost in this approach
+def filter_adjacency_matrices(pag, pag_labels, filter_labels):
+    # Convert to numpy arrays for easier manipulation
+    pag = np.array(pag)
 
-r = run_riod(df, all_labels, 0.05)
-for row in pag:
-    print(row)
-print('-'*10)
-for row in r[0][0]:
-    print(row)
+    # Find indices of pred_labels in true_labels to maintain the order of pred_labels
+    indices = [pag_labels.index(label) for label in filter_labels if label in pag_labels]
 
+    # Filter the rows and columns of true_pag to match the order of pred_labels
+    filtered_pag = pag[np.ix_(indices, indices)]
 
-shd = 0
-tp = 0
-fp = 0
-tn = 0
-fn = 0
-correct_edges = 0
-other = 0
-for i in range(len(pag)):
-    for j in range(i, len(pag)):
-        true_edge_start = pag[i][j]
-        true_edge_end = pag[j][i]
+    # Extract the corresponding labels
+    filtered_true_labels = [pag_labels[i] for i in indices]
 
-        assert (true_edge_start != 0 and true_edge_end != 0) or true_edge_start == true_edge_end, 'Missing edges need to be symmetric'
+    return filtered_pag.tolist(), filtered_true_labels
 
-        # TODO: this needs to happen for all results of the IOD not just r[0]
-        pred_pag = r[0][0]
-        pred_edge_start = pred_pag[i][j]
-        pred_edge_end = pred_pag[j][i]
+def evaluate_prediction(true_pag, pred_pag, true_labels, pred_labels):
+    shd = 0
+    tp = 0
+    fp = 0
+    tn = 0
+    fn = 0
+    correct_edges = 0
+    other = 0
 
-        assert (pred_edge_start != 0 and pred_edge_end != 0) or pred_edge_start == pred_edge_end, 'Missing edges need to be symmetric'
+    true_sub_pag, true_sub_labels = filter_adjacency_matrices(true_pag, true_labels, pred_labels)
+    if len(pred_pag) > len(pred_labels):
+        pred_pag, _ = filter_adjacency_matrices(pred_pag, true_labels, pred_labels)
 
-        # Missing edge in both
-        if true_edge_start == 0 and pred_edge_start == 0:
-            tn += 1
-            continue
+    assert tuple(true_sub_labels) == tuple(pred_labels), 'When evaluating, subgraph of true PAG needs to match vertices of predicted PAG'
 
-        # False Positive
-        if true_edge_start == 0 and pred_edge_start != 0:
-            fp += 1
+    for i in range(len(true_sub_pag)):
+        for j in range(i, len(true_sub_pag)):
+            true_edge_start = true_sub_pag[i][j]
+            true_edge_end = true_sub_pag[j][i]
+
+            assert (true_edge_start != 0 and true_edge_end != 0) or true_edge_start == true_edge_end, 'Missing edges need to be symmetric'
+
+            pred_edge_start = pred_pag[i][j]
+            pred_edge_end = pred_pag[j][i]
+
+            assert (pred_edge_start != 0 and pred_edge_end != 0) or pred_edge_start == pred_edge_end, 'Missing edges need to be symmetric'
+
+            # Missing edge in both
+            if true_edge_start == 0 and pred_edge_start == 0:
+                tn += 1
+                continue
+
+            # False Positive
+            if true_edge_start == 0 and pred_edge_start != 0:
+                fp += 1
+                shd += 1
+                continue
+
+            # False Negative
+            if true_edge_start != 0 and pred_edge_start == 0:
+                fn += 1
+                shd += 1
+                continue
+            # True Positive
+            if true_edge_start != 0 and pred_edge_start != 0:
+                tp += 1
+                continue
+
+            # Same edge in both
+            if true_edge_start == pred_edge_start and true_edge_end == pred_edge_end:
+                correct_edges += 1
+                continue
+
+            other += 1
             shd += 1
-            continue
 
-        # False Negative
-        if true_edge_start != 0 and pred_edge_start == 0:
-            fn += 1
-            shd += 1
-            continue
-        # True Positive
-        if true_edge_start != 0 and pred_edge_start != 0:
-            tp += 1
-            continue
+    return shd, tp, tn, fp, fn, other, correct_edges
 
-        # Same edge in both
-        if true_edge_start == pred_edge_start and true_edge_end == pred_edge_end:
-            correct_edges += 1
-            continue
+def log_results(target_dir, target_file, results_s, results_c):
+    shd_s, tp_s, tn_s, fp_s, fn_s, other_s, correct_edges_s = zip(*results_s)
+    shd_c, tp_c, tn_c, fp_c, fn_c, other_c, correct_edges_c = zip(*results_c)
 
-        other += 1
-        shd += 1
+    false_discovery_rate_s = [_fp_s/(_fp_s+_tp_s) for _fp_s, _tp_s in zip(fp_s, tp_s)]
+    false_omission_rate_s = [_fn_s/(_fn_s+_tn_s) for _fn_s, _tn_s in zip(fn_s, tn_s)]
 
-false_discovery_rate = fp/(fp+tp)
-false_omission_rate = fn/(fn+tn)
+    false_discovery_rate_c = [_fp_c/(_fp_c+_tp_c) if _fp_c+_tp_c > 0 else 0 for _fp_c, _tp_c in zip(fp_c, tp_c) ]
+    false_omission_rate_c = [_fn_c/(_fn_c+_tn_c) if _fn_c+_tn_c > 0 else 0 for _fn_c, _tn_c in zip(fn_c, tn_c)]
 
-print(f'{shd=}, {tp=}, {tn=}, {fp=}, {fn=}, {other=}')
-print(f'{false_discovery_rate=}')
-print(f'{false_omission_rate=}')
+    result = {
+        "alpha": ALPHA,
+        "num_samples": NUM_SAMPLES,
+        "single_client_data_fraction": CLIENT_A_DATA_FRACTION,
+        "single": {
+            "num_pags": len(results_s),
+            "shd": shd_s,
+            "tp": tp_s,
+            "tn": tn_s,
+            "fp": fp_s,
+            "fn": fn_s,
+            "fdr": false_discovery_rate_s,
+            "for": false_omission_rate_s
+        },
+        "coop": {
+            "num_pags": len(results_c),
+            "shd": shd_c,
+            "tp": tp_c,
+            "tn": tn_c,
+            "fp": fp_c,
+            "fn": fn_c,
+            "fdr": false_discovery_rate_c,
+            "for": false_omission_rate_c
+        }
+    }
+
+    with open(Path(target_dir) / target_file, "a") as f:
+        f.write(json.dumps(result) + '\n')
+
+ALPHA = 0.05
+NUM_TESTS = 100
+
+test_setups *= NUM_TESTS
+
+for test_setup in tqdm(test_setups, desc='Running Simulation'):
+    (true_pag, all_labels), (server_single, server_coop) = setup_servers(test_setup)
+
+    results_single = server_single.run()
+    labels_single = sorted(list(server_single.schema.keys()))
+    df_single = server_results_to_dataframe(labels_single, results_single)
+
+    results_coop = server_coop.run()
+    labels_coop = sorted(list(server_coop.schema.keys()))
+    df_coop = server_results_to_dataframe(labels_coop, results_coop)
+
+    pag_list_single, pag_labels_single = run_riod(df_single, labels_single, ALPHA)
+    pag_list_coop, pag_labels_coop = run_riod(df_coop, labels_coop, ALPHA)
+    pag_labels_single = sorted(pag_labels_single)
+    pag_labels_coop = sorted(pag_labels_coop)
+
+    metrics_single = []
+    for pred_pag_single, _pag_labels_single in zip(pag_list_single, pag_labels_single):
+        # _pag_labels_single should always equal labels_single
+        metrics = evaluate_prediction(true_pag, pred_pag_single, all_labels, labels_single)
+        metrics_single.append(metrics)
+
+    metrics_coop = []
+    for pred_pag_coop, _pag_labels_coop in zip(pag_list_coop, pag_labels_coop):
+        # also use reduced vertice set for better comparison (instead of _pag_labels_coop)
+        metrics = evaluate_prediction(true_pag, pred_pag_coop, all_labels, labels_single)
+        metrics_coop.append(metrics)
+
+    if len(metrics_single) == 0:
+        continue
+    if len(metrics_coop) == 0:
+        continue
+
+    log_results('./experiments/simulation/s1', 'data_long.ndjson', metrics_single, metrics_coop)
