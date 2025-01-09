@@ -142,7 +142,7 @@ def pag_to_node_collection(pag):
 
 test_setups = list(zip(truePAGs, subsetsList))
 
-NUM_SAMPLES = 2000
+NUM_SAMPLES = 1000
 CLIENT_A_DATA_FRACTION = 0.2
 
 def setup_servers(test_setup):
@@ -296,8 +296,8 @@ def log_results(target_dir, target_file, results_s, results_c):
     shd_s, tp_s, tn_s, fp_s, fn_s, other_s, correct_edges_s = zip(*results_s)
     shd_c, tp_c, tn_c, fp_c, fn_c, other_c, correct_edges_c = zip(*results_c)
 
-    false_discovery_rate_s = [_fp_s/(_fp_s+_tp_s) for _fp_s, _tp_s in zip(fp_s, tp_s)]
-    false_omission_rate_s = [_fn_s/(_fn_s+_tn_s) for _fn_s, _tn_s in zip(fn_s, tn_s)]
+    false_discovery_rate_s = [_fp_s/(_fp_s+_tp_s) if _fp_s+_tp_s > 0 else 0 for _fp_s, _tp_s in zip(fp_s, tp_s)]
+    false_omission_rate_s = [_fn_s/(_fn_s+_tn_s) if _fn_s+_tn_s > 0 else 0 for _fn_s, _tn_s in zip(fn_s, tn_s)]
 
     false_discovery_rate_c = [_fp_c/(_fp_c+_tp_c) if _fp_c+_tp_c > 0 else 0 for _fp_c, _tp_c in zip(fp_c, tp_c) ]
     false_omission_rate_c = [_fn_c/(_fn_c+_tn_c) if _fn_c+_tn_c > 0 else 0 for _fn_c, _tn_c in zip(fn_c, tn_c)]
@@ -332,7 +332,9 @@ def log_results(target_dir, target_file, results_s, results_c):
         f.write(json.dumps(result) + '\n')
 
 ALPHA = 0.05
-NUM_TESTS = 100
+NUM_TESTS = 20
+
+#test_setups = test_setups[:1]
 
 test_setups *= NUM_TESTS
 
@@ -369,4 +371,4 @@ for test_setup in tqdm(test_setups, desc='Running Simulation'):
     if len(metrics_coop) == 0:
         continue
 
-    log_results('./experiments/simulation/s1', 'data_long.ndjson', metrics_single, metrics_coop)
+    log_results('./experiments/simulation/s1', 'data_test_alot.ndjson', metrics_single, metrics_coop)

@@ -1,7 +1,7 @@
 import polars as pl
 import polars.selectors as cs
 
-file = 'experiments/simulation/s1/data.ndjson'
+file = 'experiments/simulation/s1/data_test_alot.ndjson'
 
 df = pl.read_ndjson(file)
 
