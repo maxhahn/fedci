@@ -1,7 +1,7 @@
 {
     "name": "Project Dev Container",
 
-    // Use the existing Dockerfile
+    //Use the existing Dockerfile
     "build": {
         "dockerfile": "../Dockerfile.dev",
         "context": ".."
@@ -26,11 +26,11 @@
     // --> No idea why workspaceFolder is not default when logging on
     //"workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind,Z",
     //"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
-    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/${localWorkspaceFolderBasename},type=bind,Z",
-    "workspaceFolder": "/workspace/${localWorkspaceFolderBasename}",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/code/${localWorkspaceFolderBasename},type=bind,Z",
+    "workspaceFolder": "/code/${localWorkspaceFolderBasename}",
     "runArgs": [
         // other args
-        "--volume=${localWorkspaceFolder}:/workspace/${localWorkspaceFolderBasename}:Z"
+        "--volume=${localWorkspaceFolder}:/code/${localWorkspaceFolderBasename}:Z"
     ],
 
     // Use specific user to avoid file permission issues
