@@ -199,25 +199,36 @@ def server_results_to_dataframe(labels, results):
     df = pd.DataFrame(data=rows, columns=columns)
     return df
 
-def run_riod(df, labels, alpha):
+def run_riod(df, labels, client_labels, alpha):
     ro.r['source']('./aggregation.r')
     aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
     # Reading and processing data
     #df = pl.read_csv("./random-data-1.csv")
-    with (ro.default_converter + pandas2ri.converter).context():
-        lvs = []
-        #converting it into r object for passing into r function
-        d = [('citestResults', ro.conversion.get_conversion().py2rpy(df)), ('labels', ro.StrVector(labels))]
-        od = OrderedDict(d)
-        lv = ro.ListVector(od)
-        lvs.append(lv)
 
-        result = aggregate_ci_results_f(lvs, alpha)
+    # let index start with 1
+    df.index += 1
+
+    label_list = [ro.StrVector(v) for v in client_labels.values()]
+    users = list(client_labels.keys())
+
+    with (ro.default_converter + pandas2ri.converter).context():
+        #converting it into r object for passing into r function
+        suff_stat = [
+            ('citestResults', ro.conversion.get_conversion().py2rpy(df)),
+            ('all_labels', ro.StrVector(labels)),
+        ]
+        suff_stat = OrderedDict(suff_stat)
+        suff_stat = ro.ListVector(suff_stat)
+
+        result = aggregate_ci_results_f(label_list, suff_stat, alpha)
 
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
         g_pag_labels = [list(x[1]) for x in result['G_PAG_Label_List'].items()]
         g_pag_list = [np.array(pag).astype(int).tolist() for pag in g_pag_list]
-        return g_pag_list, g_pag_labels
+        gi_pag_list = [x[1].tolist() for x in result['Gi_PAG_list'].items()]
+        gi_pag_labels = [list(x[1]) for x in result['Gi_PAG_Label_List'].items()]
+        g_pag_list = [np.array(pag).astype(int).tolist() for pag in gi_pag_list]
+        return g_pag_list, g_pag_labels, {u:r for u,r in zip(users, gi_pag_list)}, {u:l for u,l in zip(users, gi_pag_labels)}
 
 def filter_adjacency_matrices(pag, pag_labels, filter_labels):
     # Convert to numpy arrays for easier manipulation
@@ -292,39 +303,75 @@ def evaluate_prediction(true_pag, pred_pag, true_labels, pred_labels):
 
     return shd, tp, tn, fp, fn, other, correct_edges
 
-def log_results(target_dir, target_file, results_s, results_c):
-    shd_s, tp_s, tn_s, fp_s, fn_s, other_s, correct_edges_s = zip(*results_s)
-    shd_c, tp_c, tn_c, fp_c, fn_c, other_c, correct_edges_c = zip(*results_c)
+def log_results(target_dir, target_file, results_s, results_c, results_s_local, results_c_local):
+    if len(results_s) != 0 and len(results_c) != 0:
+        shd_s, tp_s, tn_s, fp_s, fn_s, other_s, correct_edges_s = zip(*results_s)
+        shd_c, tp_c, tn_c, fp_c, fn_c, other_c, correct_edges_c = zip(*results_c)
 
-    false_discovery_rate_s = [_fp_s/(_fp_s+_tp_s) if _fp_s+_tp_s > 0 else 0 for _fp_s, _tp_s in zip(fp_s, tp_s)]
-    false_omission_rate_s = [_fn_s/(_fn_s+_tn_s) if _fn_s+_tn_s > 0 else 0 for _fn_s, _tn_s in zip(fn_s, tn_s)]
+        false_discovery_rate_s = [_fp_s/(_fp_s+_tp_s) if _fp_s+_tp_s > 0 else 0 for _fp_s, _tp_s in zip(fp_s, tp_s)]
+        false_omission_rate_s = [_fn_s/(_fn_s+_tn_s) if _fn_s+_tn_s > 0 else 0 for _fn_s, _tn_s in zip(fn_s, tn_s)]
 
-    false_discovery_rate_c = [_fp_c/(_fp_c+_tp_c) if _fp_c+_tp_c > 0 else 0 for _fp_c, _tp_c in zip(fp_c, tp_c) ]
-    false_omission_rate_c = [_fn_c/(_fn_c+_tn_c) if _fn_c+_tn_c > 0 else 0 for _fn_c, _tn_c in zip(fn_c, tn_c)]
+        false_discovery_rate_c = [_fp_c/(_fp_c+_tp_c) if _fp_c+_tp_c > 0 else 0 for _fp_c, _tp_c in zip(fp_c, tp_c) ]
+        false_omission_rate_c = [_fn_c/(_fn_c+_tn_c) if _fn_c+_tn_c > 0 else 0 for _fn_c, _tn_c in zip(fn_c, tn_c)]
+
+        global_comparison = {
+            "single": {
+                "num_pags": len(results_s),
+                "shd": shd_s,
+                "tp": tp_s,
+                "tn": tn_s,
+                "fp": fp_s,
+                "fn": fn_s,
+                "fdr": false_discovery_rate_s,
+                "for": false_omission_rate_s
+            },
+            "coop": {
+                "num_pags": len(results_c),
+                "shd": shd_c,
+                "tp": tp_c,
+                "tn": tn_c,
+                "fp": fp_c,
+                "fn": fn_c,
+                "fdr": false_discovery_rate_c,
+                "for": false_omission_rate_c
+            }
+        }
+    else:
+        global_comparison = None
+
+    shd_sl, tp_sl, tn_sl, fp_sl, fn_sl, other_sl, correct_edges_sl = results_s_local
+    shd_cl, tp_cl, tn_cl, fp_cl, fn_cl, other_cl, correct_edges_cl = results_c_local
+
+    false_discovery_rate_sl = fp_sl/(fp_sl+tp_sl) if fp_sl+tp_sl > 0 else 0
+    false_omission_rate_sl = fn_sl/(fn_sl+tn_sl) if fn_sl+tn_sl > 0 else 0
+
+    false_discovery_rate_cl = fp_cl/(fp_cl+tp_cl) if fp_cl+tp_cl > 0 else 0
+    false_omission_rate_cl = fn_cl/(fn_cl+tn_cl) if fn_cl+tn_cl > 0 else 0
 
     result = {
         "alpha": ALPHA,
         "num_samples": NUM_SAMPLES,
         "single_client_data_fraction": CLIENT_A_DATA_FRACTION,
-        "single": {
-            "num_pags": len(results_s),
-            "shd": shd_s,
-            "tp": tp_s,
-            "tn": tn_s,
-            "fp": fp_s,
-            "fn": fn_s,
-            "fdr": false_discovery_rate_s,
-            "for": false_omission_rate_s
-        },
-        "coop": {
-            "num_pags": len(results_c),
-            "shd": shd_c,
-            "tp": tp_c,
-            "tn": tn_c,
-            "fp": fp_c,
-            "fn": fn_c,
-            "fdr": false_discovery_rate_c,
-            "for": false_omission_rate_c
+        "global": global_comparison,
+        "local": {
+            "single": {
+                "shd": shd_sl,
+                "tp": tp_sl,
+                "tn": tn_sl,
+                "fp": fp_sl,
+                "fn": fn_sl,
+                "fdr": false_discovery_rate_sl,
+                "for": false_omission_rate_sl
+            },
+            "coop": {
+                "shd": shd_cl,
+                "tp": tp_cl,
+                "tn": tn_cl,
+                "fp": fp_cl,
+                "fn": fn_cl,
+                "fdr": false_discovery_rate_cl,
+                "for": false_omission_rate_cl
+            }
         }
     }
 
@@ -342,33 +389,41 @@ for test_setup in tqdm(test_setups, desc='Running Simulation'):
     (true_pag, all_labels), (server_single, server_coop) = setup_servers(test_setup)
 
     results_single = server_single.run()
-    labels_single = sorted(list(server_single.schema.keys()))
-    df_single = server_results_to_dataframe(labels_single, results_single)
+    all_labels_single = sorted(list(server_single.schema.keys()))
+    single_labels_coop = {id: sorted(list(schema.keys())) for id, schema in server_single.client_schemas.items()}
+    df_single = server_results_to_dataframe(all_labels_single, results_single)
 
     results_coop = server_coop.run()
-    labels_coop = sorted(list(server_coop.schema.keys()))
-    df_coop = server_results_to_dataframe(labels_coop, results_coop)
+    all_labels_coop = sorted(list(server_coop.schema.keys()))
+    client_labels_coop = {id: sorted(list(schema.keys())) for id, schema in server_coop.client_schemas.items()}
+    df_coop = server_results_to_dataframe(all_labels_coop, results_coop)
 
-    pag_list_single, pag_labels_single = run_riod(df_single, labels_single, ALPHA)
-    pag_list_coop, pag_labels_coop = run_riod(df_coop, labels_coop, ALPHA)
+    pag_list_single, pag_labels_single, pag_list_single_per_client, pag_labels_single_per_client = run_riod(df_single, all_labels_single, single_labels_coop, ALPHA)
+    pag_list_coop, pag_labels_coop, pag_list_coop_per_client, pag_labels_coop_per_client = run_riod(df_coop, all_labels_coop, client_labels_coop, ALPHA)
+
+    client_id, pred_pag_single = list(pag_list_single_per_client.items())[0]
+    pred_pag_coop = pag_list_coop_per_client[client_id]
+
+    # Only compare local graphs
+    metrics_single_local = evaluate_prediction(true_pag, pred_pag_single, all_labels, all_labels_single)
+    metrics_coop_local = evaluate_prediction(true_pag, pred_pag_coop, all_labels, all_labels_single)
+
+
+    # Compare graph subset
     pag_labels_single = sorted(pag_labels_single)
     pag_labels_coop = sorted(pag_labels_coop)
 
     metrics_single = []
     for pred_pag_single, _pag_labels_single in zip(pag_list_single, pag_labels_single):
         # _pag_labels_single should always equal labels_single
-        metrics = evaluate_prediction(true_pag, pred_pag_single, all_labels, labels_single)
+        metrics = evaluate_prediction(true_pag, pred_pag_single, all_labels, all_labels_single)
         metrics_single.append(metrics)
 
     metrics_coop = []
     for pred_pag_coop, _pag_labels_coop in zip(pag_list_coop, pag_labels_coop):
         # also use reduced vertice set for better comparison (instead of _pag_labels_coop)
-        metrics = evaluate_prediction(true_pag, pred_pag_coop, all_labels, labels_single)
+        metrics = evaluate_prediction(true_pag, pred_pag_coop, all_labels, all_labels_single)
         metrics_coop.append(metrics)
 
-    if len(metrics_single) == 0:
-        continue
-    if len(metrics_coop) == 0:
-        continue
-
-    log_results('./experiments/simulation/s1', 'data_test_alot.ndjson', metrics_single, metrics_coop)
+    # log metrics
+    log_results('./experiments/simulation/s1', 'data.ndjson', metrics_single, metrics_coop, metrics_single_local, metrics_coop_local)

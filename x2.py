@@ -1,18 +1,20 @@
 import polars as pl
 import polars.selectors as cs
 
-file = 'experiments/simulation/s1/data_test_alot.ndjson'
+file = 'experiments/simulation/s1/data.ndjson'
 
 df = pl.read_ndjson(file)
 
-df = df.with_columns(pl.col('single').struct.unnest().name.suffix('_single'))
-df = df.with_columns(pl.col('coop').struct.unnest().name.suffix('_coop'))
+df_global = df.with_columns(pl.col('global').struct.unnest()).drop('global')
+df_local = df.with_columns(pl.col('local').struct.unnest()).drop('local')
 
-df = df.drop('single', 'coop')
+df_global = df_global.with_columns(pl.col('single').struct.unnest().name.suffix('_single'))
+df_global = df_global.with_columns(pl.col('coop').struct.unnest().name.suffix('_coop'))
 
-print(df.select('num_pags_single', 'num_pags_coop').describe())
+df_local = df_local.with_columns(pl.col('single').struct.unnest().name.suffix('_single'))
+df_local = df_local.with_columns(pl.col('coop').struct.unnest().name.suffix('_coop'))
 
-df = df.explode(cs.ends_with('_single') - cs.starts_with('num_pags'))
-df = df.explode(cs.ends_with('_coop') - cs.starts_with('num_pags'))
+#df = df.explode(cs.ends_with('_single_global') - cs.starts_with('num_pags'))
+#df = df.explode(cs.ends_with('_coop_global') - cs.starts_with('num_pags'))
 
-print(df.select(cs.starts_with('shd'), cs.starts_with('fdr'), cs.starts_with('for')).describe())
+print(df_local.select(cs.starts_with('shd'), cs.starts_with('fdr'), cs.starts_with('for')).describe())

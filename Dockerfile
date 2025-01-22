@@ -70,18 +70,16 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
 # Copy project data
-COPY ./rIOD /rIOD
-WORKDIR /rIOD
+COPY ./imports /r-imports
+WORKDIR /r-imports
 
 # Install FCI Utils
-RUN R CMD INSTALL /rIOD/imports/FCI.Utils_1.0.tar.gz
-
-# Build and install rIOD package
-RUN R CMD build /rIOD
-RUN R CMD INSTALL /rIOD/rIOD_1.0.tar.gz
+RUN R CMD INSTALL /r-imports/FCI.Utils_1.0.tar.gz
+# Install rIOD
+RUN R CMD INSTALL /r-imports/rIOD_1.0.tar.gz
 
 WORKDIR /
-RUN rm -r /rIOD
+RUN rm -r /r-imports
 
 # ,------.            ,--.  ,--.                        ,------.               ,--.
 # |  .--. ',--. ,--.,-'  '-.|  ,---.  ,---. ,--,--,     |  .--. ' ,--,--. ,---.|  |,-. ,--,--. ,---.  ,---.  ,---.
