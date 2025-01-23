@@ -143,8 +143,8 @@ def pag_to_node_collection(pag):
 
 test_setups = list(zip(truePAGs, subsetsList))
 
-NUM_SAMPLES = 1000
-CLIENT_A_DATA_FRACTION = 0.5
+NUM_SAMPLES = 100
+CLIENT_A_DATA_FRACTION = 0.1
 ALPHA = 0.05
 
 def get_data(test_setup):
@@ -343,13 +343,13 @@ def evaluate_prediction(true_pag, pred_pag, true_labels, pred_labels):
 
     return shd, tp, tn, fp, fn, other, correct_edges
 
-def log_results(target_dir, target_file, results_fedci, results_pvalagg):
+def log_results(target_dir, target_file, name, metrics):
     result = {
+        "name": name,
         "alpha": ALPHA,
         "num_samples": NUM_SAMPLES,
         "single_client_data_fraction": CLIENT_A_DATA_FRACTION,
-        "fedci": results_fedci,
-        "pvalagg": results_pvalagg
+        "metrics": metrics
     }
 
     with open(Path(target_dir) / target_file, "a") as f:
@@ -441,12 +441,14 @@ for test_setup in tqdm(test_setups, desc='Running Simulation'):
 
     pag_list, pag_labels, _, _ = run_riod(df_fedci, all_labels_fedci, client_labels, ALPHA)
 
-    metrics_fedci = calculate_pag_metrics(
+    metrics = calculate_pag_metrics(
         np.array(true_pag),
         [np.array(p) for p in pag_list],
         all_labels,
         pag_labels
     )
+
+    log_results('./experiments/simulation/s3', 'data2.ndjson', 'fedci', metrics)
 
     ## Run p val agg IOD
 
@@ -460,7 +462,7 @@ for test_setup in tqdm(test_setups, desc='Running Simulation'):
         ALPHA
     )
 
-    metrics_pval_agg = calculate_pag_metrics(
+    metrics = calculate_pag_metrics(
         np.array(true_pag),
         [np.array(p) for p in pag_list],
         all_labels,
@@ -468,4 +470,7 @@ for test_setup in tqdm(test_setups, desc='Running Simulation'):
     )
 
     # log metrics
-    log_results('./experiments/simulation/s3', 'data.ndjson', metrics_fedci, metrics_pval_agg)
+    log_results('./experiments/simulation/s3', 'data2.ndjson', 'p_val_agg', metrics)
+
+# TODO: make number of clients variable
+# increase to 3, 5, 10

@@ -43,20 +43,30 @@ def analyze_fedci_vs_pvalagg(df):
     return df, mean_diffs
 
 # Filepath to the JSON file
-json_file = "experiments/simulation/s3/data.ndjson"
+json_file = "experiments/simulation/s3/data2.ndjson"
+df = pl.read_ndjson(json_file)
 
-# Load and prepare the data
-df = load_and_prepare_data(json_file)
-print(df.select(cs.ends_with('SHD'), cs.ends_with('FDR'), cs.ends_with('FOR')))
+#df = df.filter(pl.col('single_client_data_fraction') == 0.5)
+#print(len(df))
+#df.write_ndjson(json_file)
 
-# Analyze fedci vs. pvalagg
-expanded_df, mean_diffs = analyze_fedci_vs_pvalagg(df)
+grouping_keys = ['name', 'num_samples', 'single_client_data_fraction', 'alpha']
+print(df.group_by(grouping_keys).agg(pl.len()))
 
-# Display the results
-print("Expanded DataFrame:")
-print(expanded_df)
 
-print("\nMean Differences Between fedci and pvalagg:")
-print(mean_diffs)
+#df1 = df.drop('fedci').rename({'pvalagg': 'metrics'}).with_columns(name=pl.lit('p_val_agg'))
+#df2 = df.drop('pvalagg').rename({'fedci': 'metrics'}).with_columns(name=pl.lit('fedci'))
+#pl.concat([df1,df2]).write_ndjson("experiments/simulation/s3/new_data.ndjson")
 
-print(expanded_df.select(cs.starts_with('diff_')).describe())
+df = df.explode('metrics')
+print(df.group_by('name').agg(pl.col('metrics').null_count()/pl.len()))
+
+df = df.with_columns(
+    pl.col('metrics').struct.unnest().name.prefix("metric_")
+)
+
+cols = cs.ends_with('_SHD') | cs.ends_with('_FOR') | cs.ends_with('_FDR')
+
+
+df_agg = df.group_by(grouping_keys).agg(pl.len(), cols.mean()).sort(grouping_keys)
+print(df_agg)
