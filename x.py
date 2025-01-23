@@ -201,7 +201,7 @@ def server_results_to_dataframe(labels, results):
 
 def run_riod(df, labels, client_labels, alpha):
     ro.r['source']('./aggregation.r')
-    aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
+    iod_on_ci_data_f = ro.globalenv['iod_on_ci_data']
     # Reading and processing data
     #df = pl.read_csv("./random-data-1.csv")
 
@@ -220,7 +220,7 @@ def run_riod(df, labels, client_labels, alpha):
         suff_stat = OrderedDict(suff_stat)
         suff_stat = ro.ListVector(suff_stat)
 
-        result = aggregate_ci_results_f(label_list, suff_stat, alpha)
+        result = iod_on_ci_data_f(label_list, suff_stat, alpha)
 
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
         g_pag_labels = [list(x[1]) for x in result['G_PAG_Label_List'].items()]
