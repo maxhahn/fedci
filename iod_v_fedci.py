@@ -144,33 +144,53 @@ def pag_to_node_collection(pag):
 test_setups = list(zip(truePAGs, subsetsList))
 
 NUM_SAMPLES = 100
+NUM_CLIENTS = 5
 CLIENT_A_DATA_FRACTION = 0.1
 ALPHA = 0.05
 
 def get_data(test_setup):
+    def split_dataframe(df, n):
+        if n <= 0:
+            raise ValueError("The number of splits 'n' must be greater than 0.")
+
+        # Determine the size of each split
+        num_rows = len(df)
+        split_size = num_rows // n
+        remainder = num_rows % n
+
+        # Create the splits
+        splits = []
+        start = 0
+        for i in range(n):
+            # Account for the remainder rows
+            extra_row = 1 if i < remainder else 0
+            end = start + split_size + extra_row
+            splits.append(df[start:end])
+            start = end
+        return splits
+
     pag = test_setup[0]
     nc = pag_to_node_collection(pag)
-    client_A_subset = test_setup[1][0]
-    client_B_subset = test_setup[1][1]
 
     data = nc.get(NUM_SAMPLES)
 
-    split_point = int(CLIENT_A_DATA_FRACTION*NUM_SAMPLES)
-    client_A_data = data[:split_point].select(client_A_subset)
-    client_B_data = data[split_point:].select(client_B_subset)
+    cols = data.columns
+    cols_c1 = test_setup[1][0]
+    cols_c2 = test_setup[1][1]
+    cols_cx = [sorted(cols, key=lambda k: random.random())[:-1] for _ in range(NUM_CLIENTS-2)]
 
-    return (pag, sorted(data.columns)), (client_A_data, client_B_data)
+    client_data = [df.select(c) for df, c in zip(split_dataframe(data, NUM_CLIENTS), [cols_c1, cols_c2] + cols_cx)]
 
-def setup_server(client_A_data, client_B_data):
+    return (pag, sorted(data.columns)), client_data
+
+def setup_server(client_data):
     # Create Clients
-    client_A = fedci.Client(client_A_data)
-    client_B = fedci.Client(client_B_data)
+    clients = [fedci.Client(d) for d in client_data]
 
     # Create Server
     server = fedci.Server(
         {
-            "1": client_A,
-            "2": client_B
+            str(i): c for i, c in enumerate(clients)
         }
     )
 
@@ -348,6 +368,7 @@ def log_results(target_dir, target_file, name, metrics):
         "name": name,
         "alpha": ALPHA,
         "num_samples": NUM_SAMPLES,
+        "num_clients": NUM_CLIENTS,
         "single_client_data_fraction": CLIENT_A_DATA_FRACTION,
         "metrics": metrics
     }
@@ -424,53 +445,58 @@ def calculate_pag_metrics(true_pag, predicted_pags, true_labels, predicted_label
     return metrics_list
 
 
-NUM_TESTS = 10
+NUM_TESTS = 20
 
 #test_setups = test_setups[5:10]
 
+data_file = 'large_test.ndjson'
+
 test_setups *= NUM_TESTS
 
-for test_setup in tqdm(test_setups, desc='Running Simulation'):
-    (true_pag, all_labels), (client_A_data, client_B_data) = get_data(test_setup)
-    server = setup_server(client_A_data, client_B_data)
+for _NUM_CLIENTS in [3,5,10]:
+    NUM_CLIENTS = _NUM_CLIENTS
+    for _NUM_SAMPLES in [50,100,250,500]:
+        NUM_SAMPLES = _NUM_SAMPLES
+        for test_setup in tqdm(test_setups, desc='Running Simulation'):
+            (true_pag, all_labels), client_data = get_data(test_setup)
+            server = setup_server(client_data)
 
-    results_fedci = server.run()
-    all_labels_fedci = sorted(list(server.schema.keys()))
-    client_labels = {id: sorted(list(schema.keys())) for id, schema in server.client_schemas.items()}
-    df_fedci = server_results_to_dataframe(all_labels_fedci, results_fedci)
+            results_fedci = server.run()
+            all_labels_fedci = sorted(list(server.schema.keys()))
+            client_labels = {id: sorted(list(schema.keys())) for id, schema in server.client_schemas.items()}
+            df_fedci = server_results_to_dataframe(all_labels_fedci, results_fedci)
 
-    pag_list, pag_labels, _, _ = run_riod(df_fedci, all_labels_fedci, client_labels, ALPHA)
+            pag_list, pag_labels, _, _ = run_riod(df_fedci, all_labels_fedci, client_labels, ALPHA)
 
-    metrics = calculate_pag_metrics(
-        np.array(true_pag),
-        [np.array(p) for p in pag_list],
-        all_labels,
-        pag_labels
-    )
+            metrics = calculate_pag_metrics(
+                np.array(true_pag),
+                [np.array(p) for p in pag_list],
+                all_labels,
+                pag_labels
+            )
 
-    log_results('./experiments/simulation/s3', 'data2.ndjson', 'fedci', metrics)
+            log_results('./experiments/simulation/s3', data_file, 'fedci', metrics)
 
-    ## Run p val agg IOD
+            ## Run p val agg IOD
 
-    client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
-    client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
+            client_ci_info = [mxm_ci_test(d) for d in client_data]
+            #client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
+            #client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
+            client_ci_dfs, client_ci_labels = zip(*client_ci_info)
 
-    pag_list, pag_labels, _, _ = run_pval_agg_iod(
-        ['1', '2'],
-        [client_A_ci_df, client_B_ci_df],
-        [client_A_labels, client_B_labels],
-        ALPHA
-    )
+            pag_list, pag_labels, _, _ = run_pval_agg_iod(
+                list(client_labels.keys()),
+                client_ci_dfs,
+                client_ci_labels,
+                ALPHA
+            )
 
-    metrics = calculate_pag_metrics(
-        np.array(true_pag),
-        [np.array(p) for p in pag_list],
-        all_labels,
-        pag_labels
-    )
+            metrics = calculate_pag_metrics(
+                np.array(true_pag),
+                [np.array(p) for p in pag_list],
+                all_labels,
+                pag_labels
+            )
 
-    # log metrics
-    log_results('./experiments/simulation/s3', 'data2.ndjson', 'p_val_agg', metrics)
-
-# TODO: make number of clients variable
-# increase to 3, 5, 10
+            # log metrics
+            log_results('./experiments/simulation/s3', data_file, 'p_val_agg', metrics)

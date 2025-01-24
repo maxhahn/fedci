@@ -43,14 +43,14 @@ def analyze_fedci_vs_pvalagg(df):
     return df, mean_diffs
 
 # Filepath to the JSON file
-json_file = "experiments/simulation/s3/data2.ndjson"
+json_file = "experiments/simulation/s3/data3.ndjson"
 df = pl.read_ndjson(json_file)
 
 #df = df.filter(pl.col('single_client_data_fraction') == 0.5)
 #print(len(df))
 #df.write_ndjson(json_file)
 
-grouping_keys = ['name', 'num_samples', 'single_client_data_fraction', 'alpha']
+grouping_keys = ['name', 'num_samples', 'num_clients', 'single_client_data_fraction', 'alpha']
 print(df.group_by(grouping_keys).agg(pl.len()))
 
 
