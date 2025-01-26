@@ -8,8 +8,8 @@ library(doFuture)
 library(gtools)
 library(rIOD)
 
-n_cores <- 8
-plan("multicore", workers = n_cores, gc=TRUE)
+#n_cores <- 8
+#plan("multicore", workers = n_cores, gc=TRUE)
 
 run_ci_test <- function(data, max_cond_set_cardinality, filedir, filename) {
   labels <- colnames(data)

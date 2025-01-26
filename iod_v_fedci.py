@@ -26,6 +26,13 @@ cb.consolewrite_warnerror = lambda x: None
 #ro.r['source']('./load_pags.r')
 #load_pags = ro.globalenv['load_pags']
 
+# 1. removed R multiprocessing (testing tn)
+# 2. put rpy2 source file open into mp function
+# 3. from rpy2.rinterface_lib import openrlib
+# with openrlib.rlock:
+#     # Your R function call here
+#     pass
+
 # load local-ci script
 ro.r['source']('./temp.r')
 # load function from R script
@@ -228,18 +235,22 @@ def server_results_to_dataframe(labels, results):
 
 def mxm_ci_test(df):
     df = df.to_pandas()
+    print(' - launch R conversion context')
     with (ro.default_converter + pandas2ri.converter).context():
         # # load local-ci script
         # ro.r['source']('./local-ci.r')
         # # load function from R script
         # run_ci_test_f = ro.globalenv['run_ci_test']
-
+        print(' - convert df')
         #converting it into r object for passing into r function
         df_r = ro.conversion.get_conversion().py2rpy(df)
+        print(' - launch R')
         #Invoking the R function and getting the result
         result = run_ci_test_f(df_r, 999, "./examples/", 'dummy')
+        print(' - completed R')
         #Converting it back to a pandas dataframe.
         df_pvals = ro.conversion.get_conversion().rpy2py(result['citestResults'])
+        print(' - completed df conversion')
         labels = list(result['labels'])
     return df_pvals, labels
 
@@ -510,7 +521,7 @@ def compare_pags(true_pag, true_labels, pred_pags, pred_labels):
 
 test_setups = list(zip(truePAGs, subsetsList))
 
-NUM_TESTS = 10
+NUM_TESTS = 1
 ALPHA = 0.05
 
 #test_setups = test_setups[5:10]
@@ -520,14 +531,27 @@ data_file_pattern = '{}-{}-{}.ndjson'
 import datetime
 import polars as pl
 
+now = int(datetime.datetime.utcnow().timestamp()*1e3)
+data_file_pattern = str(now) + '-' + data_file_pattern
 
 def run_comparison(setup):
     idx, data_dir, data_file_pattern, test_setup, num_samples, num_clients = setup
     data_file = data_file_pattern.format(idx, num_samples, num_clients)
     (true_pag, all_labels), client_data = get_data(test_setup, num_samples, num_clients)
 
-    x = [d.with_columns(client_id=pl.lit(i)) for i, d in enumerate(client_data)]
-    pl.concat(x, how='diagonal').write_parquet('test_data.parquet')
+    #x = [d.with_columns(client_id=pl.lit(i)) for i, d in enumerate(client_data)]
+    #pl.concat(x, how='diagonal').write_parquet('test_data.parquet')
+
+    # x = pl.read_parquet('test_data.parquet')
+    # client_data = x.partition_by('client_id')
+    # #df.select(pl.all().is_null().all()).unpivot().filter(pl.col('value') == False)['variable'].to_list()
+    # client_data = [
+    #     d.select(d.drop('client_id').select(pl.all().is_null().all()).unpivot().filter(pl.col('value') == False)['variable'].to_list())
+    #     for d in client_data
+    # ]
+    # from functools import reduce
+    # #union_result = reduce(lambda x, y: x.union(y), list_of_sets)
+    # all_labels = sorted(list(reduce(lambda x, y: x.union(y), [set(d.columns) for d in client_data])))
 
     #print('start')
 
@@ -560,8 +584,14 @@ def run_comparison(setup):
     log_results(data_dir, data_file, 'fedci', metrics, metrics2, ALPHA, num_samples, num_clients)
 
     ## Run p val agg IOD
-    #print('setup pvalagg')
-    client_ci_info = [mxm_ci_test(d) for d in client_data]
+    print('setup pvalagg')
+    client_ci_info = []
+    for i,d in enumerate(client_data):
+        print(f'=== {i}')
+        d.write_parquet('test_subdata.parquet')
+        client_ci_info.append(mxm_ci_test(d))
+    #client_ci_info = [mxm_ci_test(d) for d in client_data]
+    print('setup done pvalagg')
     #client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
     #client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
     client_ci_dfs, client_ci_labels = zip(*client_ci_info)
@@ -587,6 +617,8 @@ def run_comparison(setup):
         pag_list,
         pag_labels
     )
+
+    # TODO: one log for both, to match results on same data
 
     #print('log pvalagg')
     # log metrics
