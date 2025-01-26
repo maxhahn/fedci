@@ -13,6 +13,7 @@ from collections import OrderedDict
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+import fcntl
 
 import dgp
 import fedci
@@ -22,8 +23,16 @@ import rpy2.rinterface_lib.callbacks as cb
 cb.consolewrite_print = lambda x: None
 cb.consolewrite_warnerror = lambda x: None
 
-ro.r['source']('./load_pags.r')
+#ro.r['source']('./load_pags.r')
+#load_pags = ro.globalenv['load_pags']
+
+# load local-ci script
+ro.r['source']('./temp.r')
+# load function from R script
 load_pags = ro.globalenv['load_pags']
+run_ci_test_f = ro.globalenv['run_ci_test']
+aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
+iod_on_ci_data_f = ro.globalenv['iod_on_ci_data']
 
 truePAGs, subsetsList = load_pags()
 
@@ -141,14 +150,7 @@ def pag_to_node_collection(pag):
     nc = random.choice(ncs)
     return nc.reset()
 
-test_setups = list(zip(truePAGs, subsetsList))
-
-NUM_SAMPLES = 100
-NUM_CLIENTS = 5
-CLIENT_A_DATA_FRACTION = 0.1
-ALPHA = 0.05
-
-def get_data(test_setup):
+def get_data(test_setup, num_samples, num_clients):
     def split_dataframe(df, n):
         if n <= 0:
             raise ValueError("The number of splits 'n' must be greater than 0.")
@@ -172,14 +174,14 @@ def get_data(test_setup):
     pag = test_setup[0]
     nc = pag_to_node_collection(pag)
 
-    data = nc.get(NUM_SAMPLES)
+    data = nc.get(num_samples)
 
     cols = data.columns
     cols_c1 = test_setup[1][0]
     cols_c2 = test_setup[1][1]
-    cols_cx = [sorted(cols, key=lambda k: random.random())[:-1] for _ in range(NUM_CLIENTS-2)]
+    cols_cx = [sorted(cols, key=lambda k: random.random())[:-1] for _ in range(num_clients-2)]
 
-    client_data = [df.select(c) for df, c in zip(split_dataframe(data, NUM_CLIENTS), [cols_c1, cols_c2] + cols_cx)]
+    client_data = [df.select(c) for df, c in zip(split_dataframe(data, num_clients), [cols_c1, cols_c2] + cols_cx)]
 
     return (pag, sorted(data.columns)), client_data
 
@@ -227,10 +229,10 @@ def server_results_to_dataframe(labels, results):
 def mxm_ci_test(df):
     df = df.to_pandas()
     with (ro.default_converter + pandas2ri.converter).context():
-        # load local-ci script
-        ro.r['source']('./local-ci.r')
-        # load function from R script
-        run_ci_test_f = ro.globalenv['run_ci_test']
+        # # load local-ci script
+        # ro.r['source']('./local-ci.r')
+        # # load function from R script
+        # run_ci_test_f = ro.globalenv['run_ci_test']
 
         #converting it into r object for passing into r function
         df_r = ro.conversion.get_conversion().py2rpy(df)
@@ -242,8 +244,8 @@ def mxm_ci_test(df):
     return df_pvals, labels
 
 def run_pval_agg_iod(users, dfs, client_labels, alpha):
-    ro.r['source']('./aggregation.r')
-    aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
+    #ro.r['source']('./aggregation.r')
+    #aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
 
     with (ro.default_converter + pandas2ri.converter).context():
         lvs = []
@@ -260,8 +262,8 @@ def run_pval_agg_iod(users, dfs, client_labels, alpha):
         return g_pag_list, g_pag_labels,  {u:r for u,r in zip(users, gi_pag_list)}, {u:l for u,l in zip(users, gi_pag_labels)}
 
 def run_riod(df, labels, client_labels, alpha):
-    ro.r['source']('./aggregation.r')
-    iod_on_ci_data_f = ro.globalenv['iod_on_ci_data']
+    # ro.r['source']('./aggregation.r')
+    # iod_on_ci_data_f = ro.globalenv['iod_on_ci_data']
     # Reading and processing data
     #df = pl.read_csv("./random-data-1.csv")
 
@@ -363,18 +365,21 @@ def evaluate_prediction(true_pag, pred_pag, true_labels, pred_labels):
 
     return shd, tp, tn, fp, fn, other, correct_edges
 
-def log_results(target_dir, target_file, name, metrics):
+def log_results(target_dir, target_file, name, metrics, metrics2, alpha, num_samples, num_clients):
     result = {
         "name": name,
-        "alpha": ALPHA,
-        "num_samples": NUM_SAMPLES,
-        "num_clients": NUM_CLIENTS,
-        "single_client_data_fraction": CLIENT_A_DATA_FRACTION,
-        "metrics": metrics
+        "alpha": alpha,
+        "num_samples": num_samples,
+        "num_clients": num_clients,
+        "metrics": metrics,
+        "alternative_metrics": metrics2
     }
 
     with open(Path(target_dir) / target_file, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
         f.write(json.dumps(result) + '\n')
+        fcntl.flock(f, fcntl.LOCK_UN)
+
 
 
 ### sklearn metrics
@@ -437,66 +442,243 @@ def calculate_pag_metrics(true_pag, predicted_pags, true_labels, predicted_label
             "FOR": for_,
             "Precision": precision,
             "Recall": recall,
-            "F1 Score": f1_score
+            "F1_Score": f1_score
         }
 
         metrics_list.append(metrics)
 
     return metrics_list
 
+## MORE METRIC ATTEMPTS
+import numpy as np
+from sklearn.metrics import precision_score, recall_score, f1_score
 
-NUM_TESTS = 20
+def reorder_adjacency_matrix(adj_matrix, variables, target_variables):
+    """
+    Reorder adjacency matrix based on target variable order.
+    """
+    index_map = {var: idx for idx, var in enumerate(variables)}
+    reorder_indices = [index_map[var] for var in target_variables]
+    reordered_matrix = adj_matrix[np.ix_(reorder_indices, reorder_indices)]
+    return reordered_matrix
+
+def _compare_pags(matrix1, variables1, matrix2, variables2):
+    """
+    Compare two PAGs and compute SHD, precision, recall, and F1 score.
+    """
+    # Convert to numpy arrays
+    matrix1 = np.array(matrix1)
+    matrix2 = np.array(matrix2)
+
+    # Reorder matrices to match variable order
+    matrix1 = reorder_adjacency_matrix(matrix1, variables1, variables2)
+
+    # Compute SHD
+    shd = np.sum(matrix1 != matrix2).item()
+
+    # Flatten and compare edges of different types
+    flat1 = matrix1.flatten()
+    flat2 = matrix2.flatten()
+
+    metrics = {}
+    for edge_type, label in [(1, "Dot Head"), (2, "Arrow Head"), (3, "Tail")]:
+        mask = (flat1 == edge_type) | (flat2 == edge_type)  # Only compare relevant edges
+        y_true = flat1[mask] == edge_type
+        y_pred = flat2[mask] == edge_type
+
+        precision = precision_score(y_true, y_pred, zero_division=np.nan)
+        recall = recall_score(y_true, y_pred, zero_division=np.nan)
+        f1 = f1_score(y_true, y_pred, zero_division=np.nan)
+
+        metrics[label] = {
+            "Precision": precision if not np.isnan(precision) else None,
+            "Recall": recall if not np.isnan(recall) else None,
+            "F1_Score": f1 if not np.isnan(f1) else None,
+        }
+
+    return {
+        "SHD": shd,
+        "Edge_Type_Metrics": metrics,
+    }
+
+def compare_pags(true_pag, true_labels, pred_pags, pred_labels):
+    metrics = []
+    for pred_pag, _pred_labels in zip(pred_pags, pred_labels):
+        metric = _compare_pags(true_pag, true_labels, pred_pag, _pred_labels)
+        metrics.append(metric)
+    return metrics
+
+test_setups = list(zip(truePAGs, subsetsList))
+
+NUM_TESTS = 10
+ALPHA = 0.05
 
 #test_setups = test_setups[5:10]
+data_dir = './experiments/simulation/pvalagg_vs_fedci'
+data_file_pattern = '{}-{}-{}.ndjson'
 
-data_file = 'large_test.ndjson'
+import datetime
+import polars as pl
 
-test_setups *= NUM_TESTS
 
-for _NUM_CLIENTS in [3,5,10]:
-    NUM_CLIENTS = _NUM_CLIENTS
-    for _NUM_SAMPLES in [50,100,250,500]:
-        NUM_SAMPLES = _NUM_SAMPLES
-        for test_setup in tqdm(test_setups, desc='Running Simulation'):
-            (true_pag, all_labels), client_data = get_data(test_setup)
-            server = setup_server(client_data)
+def run_comparison(setup):
+    idx, data_dir, data_file_pattern, test_setup, num_samples, num_clients = setup
+    data_file = data_file_pattern.format(idx, num_samples, num_clients)
+    (true_pag, all_labels), client_data = get_data(test_setup, num_samples, num_clients)
 
-            results_fedci = server.run()
-            all_labels_fedci = sorted(list(server.schema.keys()))
-            client_labels = {id: sorted(list(schema.keys())) for id, schema in server.client_schemas.items()}
-            df_fedci = server_results_to_dataframe(all_labels_fedci, results_fedci)
+    x = [d.with_columns(client_id=pl.lit(i)) for i, d in enumerate(client_data)]
+    pl.concat(x, how='diagonal').write_parquet('test_data.parquet')
 
-            pag_list, pag_labels, _, _ = run_riod(df_fedci, all_labels_fedci, client_labels, ALPHA)
+    #print('start')
 
-            metrics = calculate_pag_metrics(
-                np.array(true_pag),
-                [np.array(p) for p in pag_list],
-                all_labels,
-                pag_labels
-            )
+    #print('setup fedci')
+    server = setup_server(client_data)
 
-            log_results('./experiments/simulation/s3', data_file, 'fedci', metrics)
+    results_fedci = server.run()
+    all_labels_fedci = sorted(list(server.schema.keys()))
+    client_labels = {id: sorted(list(schema.keys())) for id, schema in server.client_schemas.items()}
+    df_fedci = server_results_to_dataframe(all_labels_fedci, results_fedci)
 
-            ## Run p val agg IOD
+    #print('iod fedci')
+    pag_list, pag_labels, _, _ = run_riod(df_fedci, all_labels_fedci, client_labels, ALPHA)
 
-            client_ci_info = [mxm_ci_test(d) for d in client_data]
-            #client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
-            #client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
-            client_ci_dfs, client_ci_labels = zip(*client_ci_info)
+    #print('metrics fedci')
+    metrics = calculate_pag_metrics(
+        np.array(true_pag),
+        [np.array(p) for p in pag_list],
+        all_labels,
+        pag_labels
+    )
+    metrics2 = compare_pags(
+        true_pag,
+        all_labels,
+        pag_list,
+        pag_labels
+    )
 
-            pag_list, pag_labels, _, _ = run_pval_agg_iod(
-                list(client_labels.keys()),
-                client_ci_dfs,
-                client_ci_labels,
-                ALPHA
-            )
+    #print('log fedci')
+    log_results(data_dir, data_file, 'fedci', metrics, metrics2, ALPHA, num_samples, num_clients)
 
-            metrics = calculate_pag_metrics(
-                np.array(true_pag),
-                [np.array(p) for p in pag_list],
-                all_labels,
-                pag_labels
-            )
+    ## Run p val agg IOD
+    #print('setup pvalagg')
+    client_ci_info = [mxm_ci_test(d) for d in client_data]
+    #client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
+    #client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
+    client_ci_dfs, client_ci_labels = zip(*client_ci_info)
 
-            # log metrics
-            log_results('./experiments/simulation/s3', data_file, 'p_val_agg', metrics)
+    #print('iod pvalagg')
+    pag_list, pag_labels, _, _ = run_pval_agg_iod(
+        list(client_labels.keys()),
+        client_ci_dfs,
+        client_ci_labels,
+        ALPHA
+    )
+
+    #print('metrics pvalagg')
+    metrics = calculate_pag_metrics(
+        np.array(true_pag),
+        [np.array(p) for p in pag_list],
+        all_labels,
+        pag_labels
+    )
+    metrics2 = compare_pags(
+        true_pag,
+        all_labels,
+        pag_list,
+        pag_labels
+    )
+
+    #print('log pvalagg')
+    # log metrics
+    log_results(data_dir, data_file, 'p_val_agg', metrics, metrics2, ALPHA, num_samples, num_clients)
+
+num_clients_options = [3,5,10]
+num_samples_options = [50,100,250,500]
+
+configurations = list(itertools.product(test_setups, num_samples_options, num_clients_options))
+
+configurations = [(data_dir, data_file_pattern) + c for c in configurations]
+
+configurations = [(i,) + c for i in range(NUM_TESTS) for c in configurations]
+
+from tqdm.contrib.concurrent import process_map
+
+for configuration in tqdm(configurations):
+    run_comparison(configuration)
+
+#process_map(run_comparison, configurations, max_workers=10, chunksize=3)
+
+# for _ in range(NUM_TESTS):
+#     now = int(datetime.datetime.utcnow().timestamp()*1e3)
+#     data_file = data_file_pattern.format(now)
+#     for num_clients in [3,5,10]:
+#         for num_samples in [50,100,250,500]:
+#             for test_setup in tqdm(test_setups, desc='Running Simulation'):
+#                 (true_pag, all_labels), client_data = get_data(test_setup, num_samples, num_clients)
+
+#                 x = [d.with_columns(client_id=pl.lit(i)) for i, d in enumerate(client_data)]
+#                 pl.concat(x, how='diagonal').write_parquet('test_data.parquet')
+
+#                 # x = pl.read_parquet('test_data.parquet')
+#                 # client_data = x.partition_by('client_id')
+#                 # #df.select(pl.all().is_null().all()).unpivot().filter(pl.col('value') == False)['variable'].to_list()
+#                 # client_data = [
+#                 #     d.select(d.drop('client_id').select(pl.all().is_null().all()).unpivot().filter(pl.col('value') == False)['variable'].to_list())
+#                 #     for d in client_data
+#                 # ]
+#                 # print(client_data[0])
+#                 # from functools import reduce
+#                 # #union_result = reduce(lambda x, y: x.union(y), list_of_sets)
+#                 # all_labels = sorted(list(reduce(lambda x, y: x.union(y), [set(d.columns) for d in client_data])))
+
+
+#                 #print('start')
+
+#                 #print('setup fedci')
+#                 server = setup_server(client_data)
+
+#                 results_fedci = server.run()
+#                 all_labels_fedci = sorted(list(server.schema.keys()))
+#                 client_labels = {id: sorted(list(schema.keys())) for id, schema in server.client_schemas.items()}
+#                 df_fedci = server_results_to_dataframe(all_labels_fedci, results_fedci)
+
+#                 #print('iod fedci')
+#                 pag_list, pag_labels, _, _ = run_riod(df_fedci, all_labels_fedci, client_labels, ALPHA)
+
+#                 #print('metrics fedci')
+#                 metrics = calculate_pag_metrics(
+#                     np.array(true_pag),
+#                     [np.array(p) for p in pag_list],
+#                     all_labels,
+#                     pag_labels
+#                 )
+
+#                 #print('log fedci')
+#                 log_results(data_dir, data_file, 'fedci', metrics, ALPHA, num_samples, num_clients)
+
+#                 ## Run p val agg IOD
+#                 #print('setup pvalagg')
+#                 client_ci_info = [mxm_ci_test(d) for d in client_data]
+#                 #client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
+#                 #client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
+#                 client_ci_dfs, client_ci_labels = zip(*client_ci_info)
+
+#                 #print('iod pvalagg')
+#                 pag_list, pag_labels, _, _ = run_pval_agg_iod(
+#                     list(client_labels.keys()),
+#                     client_ci_dfs,
+#                     client_ci_labels,
+#                     ALPHA
+#                 )
+
+#                 #print('metrics pvalagg')
+#                 metrics = calculate_pag_metrics(
+#                     np.array(true_pag),
+#                     [np.array(p) for p in pag_list],
+#                     all_labels,
+#                     pag_labels
+#                 )
+
+#                 #print('log pvalagg')
+#                 # log metrics
+#                 log_results(data_dir, data_file, 'p_val_agg', metrics, ALPHA, num_samples, num_clients)
