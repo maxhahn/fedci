@@ -123,10 +123,6 @@ suffStat <- list()
 suffStat$citestResultsList <- citestResultsList
 suffStat$labelList <- labelList
 
-print('EYO')
-print(labelList)
-print(suffStat)
-
 # call IOD.
 alpha <- 0.05
 iod_out <- IOD(labelList, suffStat, alpha)

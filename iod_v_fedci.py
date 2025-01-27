@@ -235,22 +235,17 @@ def server_results_to_dataframe(labels, results):
 
 def mxm_ci_test(df):
     df = df.to_pandas()
-    print(' - launch R conversion context')
     with (ro.default_converter + pandas2ri.converter).context():
         # # load local-ci script
         # ro.r['source']('./local-ci.r')
         # # load function from R script
         # run_ci_test_f = ro.globalenv['run_ci_test']
-        print(' - convert df')
         #converting it into r object for passing into r function
         df_r = ro.conversion.get_conversion().py2rpy(df)
-        print(' - launch R')
         #Invoking the R function and getting the result
         result = run_ci_test_f(df_r, 999, "./examples/", 'dummy')
-        print(' - completed R')
         #Converting it back to a pandas dataframe.
         df_pvals = ro.conversion.get_conversion().rpy2py(result['citestResults'])
-        print(' - completed df conversion')
         labels = list(result['labels'])
     return df_pvals, labels
 
@@ -376,7 +371,8 @@ def evaluate_prediction(true_pag, pred_pag, true_labels, pred_labels):
 
     return shd, tp, tn, fp, fn, other, correct_edges
 
-def log_results(target_dir, target_file, name, metrics, metrics2, alpha, num_samples, num_clients):
+
+def log_resultsx(target_dir, target_file, name, metrics, metrics2, alpha, num_samples, num_clients):
     result = {
         "name": name,
         "alpha": alpha,
@@ -384,6 +380,20 @@ def log_results(target_dir, target_file, name, metrics, metrics2, alpha, num_sam
         "num_clients": num_clients,
         "metrics": metrics,
         "alternative_metrics": metrics2
+    }
+
+    with open(Path(target_dir) / target_file, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(json.dumps(result) + '\n')
+        fcntl.flock(f, fcntl.LOCK_UN)
+
+def log_results(target_dir, target_file, metrics, metrics_pvalagg, alpha, num_samples, num_clients):
+    result = {
+        "alpha": alpha,
+        "num_samples": num_samples,
+        "num_clients": num_clients,
+        "metrics_fedci": metrics,
+        "metrics_pvalagg": metrics_pvalagg
     }
 
     with open(Path(target_dir) / target_file, "a") as f:
@@ -521,7 +531,7 @@ def compare_pags(true_pag, true_labels, pred_pags, pred_labels):
 
 test_setups = list(zip(truePAGs, subsetsList))
 
-NUM_TESTS = 1
+NUM_TESTS = 10
 ALPHA = 0.05
 
 #test_setups = test_setups[5:10]
@@ -573,25 +583,25 @@ def run_comparison(setup):
         all_labels,
         pag_labels
     )
-    metrics2 = compare_pags(
-        true_pag,
-        all_labels,
-        pag_list,
-        pag_labels
-    )
+    # metrics2 = compare_pags(
+    #     true_pag,
+    #     all_labels,
+    #     pag_list,
+    #     pag_labels
+    # )
 
     #print('log fedci')
-    log_results(data_dir, data_file, 'fedci', metrics, metrics2, ALPHA, num_samples, num_clients)
+    #log_results(data_dir, data_file, 'fedci', metrics, metrics2, ALPHA, num_samples, num_clients)
 
     ## Run p val agg IOD
-    print('setup pvalagg')
+    #print('setup pvalagg')
     client_ci_info = []
-    for i,d in enumerate(client_data):
-        print(f'=== {i}')
-        d.write_parquet('test_subdata.parquet')
-        client_ci_info.append(mxm_ci_test(d))
-    #client_ci_info = [mxm_ci_test(d) for d in client_data]
-    print('setup done pvalagg')
+    #for i,d in enumerate(client_data):
+    #    print(f'=== {i}')
+    #    d.write_parquet('test_subdata.parquet')
+    #    client_ci_info.append(mxm_ci_test(d))
+    client_ci_info = [mxm_ci_test(d) for d in client_data]
+    #print('setup done pvalagg')
     #client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
     #client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
     client_ci_dfs, client_ci_labels = zip(*client_ci_info)
@@ -605,24 +615,25 @@ def run_comparison(setup):
     )
 
     #print('metrics pvalagg')
-    metrics = calculate_pag_metrics(
+    metrics_pvalagg = calculate_pag_metrics(
         np.array(true_pag),
         [np.array(p) for p in pag_list],
         all_labels,
         pag_labels
     )
-    metrics2 = compare_pags(
-        true_pag,
-        all_labels,
-        pag_list,
-        pag_labels
-    )
+    # metrics2 = compare_pags(
+    #     true_pag,
+    #     all_labels,
+    #     pag_list,
+    #     pag_labels
+    # )
 
     # TODO: one log for both, to match results on same data
 
     #print('log pvalagg')
     # log metrics
-    log_results(data_dir, data_file, 'p_val_agg', metrics, metrics2, ALPHA, num_samples, num_clients)
+    #log_results(data_dir, data_file, 'p_val_agg', metrics, metrics2, ALPHA, num_samples, num_clients)
+    log_results(data_dir, data_file, metrics, metrics_pvalagg, ALPHA, num_samples, num_clients)
 
 num_clients_options = [3,5,10]
 num_samples_options = [50,100,250,500]
@@ -635,10 +646,10 @@ configurations = [(i,) + c for i in range(NUM_TESTS) for c in configurations]
 
 from tqdm.contrib.concurrent import process_map
 
-for configuration in tqdm(configurations):
-    run_comparison(configuration)
+#for configuration in tqdm(configurations):
+#    run_comparison(configuration)
 
-#process_map(run_comparison, configurations, max_workers=10, chunksize=3)
+process_map(run_comparison, configurations, max_workers=10, chunksize=3)
 
 # for _ in range(NUM_TESTS):
 #     now = int(datetime.datetime.utcnow().timestamp()*1e3)
