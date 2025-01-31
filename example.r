@@ -135,5 +135,9 @@ lapply(iod_out$Gi_PAG_list, renderAG)
 iod_out$G_PAG_List
 lapply(iod_out$G_PAG_List, renderAG)
 
+print('EEEYO')
+print(typeof(true.amat.pag))
+print(true.amat.pag)
+
 #function to check if the true pag is inside the pag list
 containsTheTrueGraph(trueAdjM = true.amat.pag, iod_out$G_PAG_List)

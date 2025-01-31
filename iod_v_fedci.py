@@ -1,4 +1,5 @@
 # Load PAGs
+from typing_extensions import Doc
 import rpy2.robjects as ro
 from rpy2.robjects import numpy2ri
 from rpy2.robjects import pandas2ri
@@ -14,6 +15,8 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 import fcntl
+import polars.selectors as cs
+
 
 import dgp
 import fedci
@@ -34,7 +37,7 @@ cb.consolewrite_warnerror = lambda x: None
 #     pass
 
 # load local-ci script
-ro.r['source']('./temp.r')
+ro.r['source']('./ci_functions.r')
 # load function from R script
 load_pags = ro.globalenv['load_pags']
 run_ci_test_f = ro.globalenv['run_ci_test']
@@ -48,7 +51,7 @@ subsetsList = [(sorted(tuple(x[0])), sorted(tuple(x[1]))) for x in subsetsList]
 def floatmatrix_to_2dlist(r_floatmatrix):
     numpy_matrix = numpy2ri.rpy2py(r_floatmatrix)
     return numpy_matrix.astype(int).tolist()
-truePAGs = [floatmatrix_to_2dlist(pag) for pag in truePAGs]
+#truePAGs = [floatmatrix_to_2dlist(pag) for pag in truePAGs]
 
 # Adjacency Matrix Arrowheads:
 # 0: Missing Edge
@@ -61,7 +64,7 @@ def pag_to_node_collection(pag):
     def get_node_collection(pag):
         nodes = []
         for i in range(len(pag)):
-            nodes.append(dgp.Node(name=alphabet[i]))
+            nodes.append(dgp.GenericNode(name=alphabet[i]))
 
         for i in range(len(pag)):
             for j in range(i, len(pag)):
@@ -89,7 +92,7 @@ def pag_to_node_collection(pag):
                 if marker_1 == 2 and marker_2 == 2:
                     # add latent confounder
                     # TODO: Maybe make this only continuos values
-                    confounder = dgp.Node(name=f'L_{alphabet[i]}{alphabet[j]}')
+                    confounder = dgp.GenericNode(name=f'L_{alphabet[i]}{alphabet[j]}')
                     nodes.append(confounder)
                     nodes[i].parents.append(confounder)
                     nodes[j].parents.append(confounder)
@@ -178,18 +181,27 @@ def get_data(test_setup, num_samples, num_clients):
             start = end
         return splits
 
-    pag = test_setup[0]
+    pag = floatmatrix_to_2dlist(test_setup[0])
     nc = pag_to_node_collection(pag)
 
-    data = nc.get(num_samples)
+    is_valid = False
+    while not is_valid:
+        data = nc.reset().get(num_samples)
 
-    cols = data.columns
-    cols_c1 = test_setup[1][0]
-    cols_c2 = test_setup[1][1]
-    cols_cx = [sorted(cols, key=lambda k: random.random())[:-1] for _ in range(num_clients-2)]
+        cols = data.columns
+        cols_c1 = test_setup[1][0]
+        cols_c2 = test_setup[1][1]
+        cols_cx = [sorted(cols, key=lambda k: random.random())[:-1] for _ in range(num_clients-2)]
 
-    client_data = [df.select(c) for df, c in zip(split_dataframe(data, num_clients), [cols_c1, cols_c2] + cols_cx)]
+        client_data = [df.select(c) for df, c in zip(split_dataframe(data, num_clients), [cols_c1, cols_c2] + cols_cx)]
 
+        is_valid = not any([split.select(fail=pl.any_horizontal((cs.boolean() | cs.string() | cs.integer()).n_unique() == 1))['fail'][0] for split in client_data])
+        for d in client_data:
+            if len(d.select(cs.boolean() | cs.string() | cs.integer())) == 0:
+                continue
+            if any([l < 3 for l in d.group_by(cs.boolean() | cs.string() | cs.integer()).len()['len'].to_list()]):
+                is_valid = False
+                break
     return (pag, sorted(data.columns)), client_data
 
 def setup_server(client_data):
@@ -249,25 +261,53 @@ def mxm_ci_test(df):
         labels = list(result['labels'])
     return df_pvals, labels
 
-def run_pval_agg_iod(users, dfs, client_labels, alpha):
+def run_pval_agg_iod(true_pag, true_labels, users, dfs, client_labels, alpha):
     #ro.r['source']('./aggregation.r')
     #aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
 
-    with (ro.default_converter + pandas2ri.converter).context():
+    with (ro.default_converter + pandas2ri.converter + numpy2ri.converter).context():
         lvs = []
         r_dfs = [ro.conversion.get_conversion().py2rpy(df) for df in dfs]
         #r_dfs = ro.ListVector(r_dfs)
         label_list = [ro.StrVector(v) for v in client_labels]
 
-        result = aggregate_ci_results_f(label_list, r_dfs, alpha)
+        true_pag_np = np.array(true_pag)
+        r_matrix = ro.r.matrix(ro.FloatVector(true_pag_np.flatten()), nrow=len(true_labels), ncol=len(true_labels))
+        colnames = ro.StrVector(true_labels)
+
+        result = aggregate_ci_results_f(r_matrix, colnames, label_list, r_dfs, alpha)
 
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
         g_pag_labels = [list(x[1]) for x in result['G_PAG_Label_List'].items()]
         gi_pag_list = [x[1].tolist() for x in result['Gi_PAG_list'].items()]
         gi_pag_labels = [list(x[1]) for x in result['Gi_PAG_Label_List'].items()]
-        return g_pag_list, g_pag_labels,  {u:r for u,r in zip(users, gi_pag_list)}, {u:l for u,l in zip(users, gi_pag_labels)}
 
-def run_riod(df, labels, client_labels, alpha):
+        found_correct_pag = bool(result['found_correct_pag'][0])
+        g_pag_shd = [x[1][0].item() for x in result['G_PAG_SHD'].items()]
+        g_pag_for = [x[1][0].item() for x in result['G_PAG_FOR'].items()]
+        g_pag_fdr = [x[1][0].item() for x in result['G_PAG_FDR'].items()]
+
+    return {
+        "found_correct": found_correct_pag,
+
+        "SHD": g_pag_shd,
+        "FOR": g_pag_for,
+        "FDR": g_pag_fdr,
+
+        "MEAN_SHD": sum(g_pag_shd)/len(g_pag_shd) if len(g_pag_shd) > 0 else None,
+        "MEAN_FOR": sum(g_pag_for)/len(g_pag_for) if len(g_pag_for) > 0 else None,
+        "MEAN_FDR": sum(g_pag_fdr)/len(g_pag_fdr) if len(g_pag_fdr) > 0 else None,
+
+        "MIN_SHD": min(g_pag_shd) if len(g_pag_shd) > 0 else None,
+        "MIN_FOR": min(g_pag_for) if len(g_pag_for) > 0 else None,
+        "MIN_FDR": min(g_pag_fdr) if len(g_pag_fdr) > 0 else None,
+
+        "MAX_SHD": max(g_pag_shd) if len(g_pag_shd) > 0 else None,
+        "MAX_FOR": max(g_pag_for) if len(g_pag_for) > 0 else None,
+        "MAX_FDR": max(g_pag_fdr) if len(g_pag_fdr) > 0 else None,
+    }
+
+def run_riod(true_pag, true_labels, df, labels, client_labels, alpha):
     # ro.r['source']('./aggregation.r')
     # iod_on_ci_data_f = ro.globalenv['iod_on_ci_data']
     # Reading and processing data
@@ -279,7 +319,7 @@ def run_riod(df, labels, client_labels, alpha):
     label_list = [ro.StrVector(v) for v in client_labels.values()]
     users = list(client_labels.keys())
 
-    with (ro.default_converter + pandas2ri.converter).context():
+    with (ro.default_converter + pandas2ri.converter + numpy2ri.converter).context():
         #converting it into r object for passing into r function
         suff_stat = [
             ('citestResults', ro.conversion.get_conversion().py2rpy(df)),
@@ -288,7 +328,11 @@ def run_riod(df, labels, client_labels, alpha):
         suff_stat = OrderedDict(suff_stat)
         suff_stat = ro.ListVector(suff_stat)
 
-        result = iod_on_ci_data_f(label_list, suff_stat, alpha)
+        true_pag_np = np.array(true_pag)
+        r_matrix = ro.r.matrix(ro.FloatVector(true_pag_np.flatten()), nrow=len(true_labels), ncol=len(true_labels))
+        colnames = ro.StrVector(true_labels)
+
+        result = iod_on_ci_data_f(r_matrix, colnames, label_list, suff_stat, alpha)
 
         g_pag_list = [x[1].tolist() for x in result['G_PAG_List'].items()]
         g_pag_labels = [list(x[1]) for x in result['G_PAG_Label_List'].items()]
@@ -296,7 +340,31 @@ def run_riod(df, labels, client_labels, alpha):
         gi_pag_list = [x[1].tolist() for x in result['Gi_PAG_list'].items()]
         gi_pag_labels = [list(x[1]) for x in result['Gi_PAG_Label_List'].items()]
         gi_pag_list = [np.array(pag).astype(int).tolist() for pag in gi_pag_list]
-    return g_pag_list, g_pag_labels, {u:r for u,r in zip(users, gi_pag_list)}, {u:l for u,l in zip(users, gi_pag_labels)}
+
+        found_correct_pag = bool(result['found_correct_pag'][0])
+        g_pag_shd = [x[1][0].item() for x in result['G_PAG_SHD'].items()]
+        g_pag_for = [x[1][0].item() for x in result['G_PAG_FOR'].items()]
+        g_pag_fdr = [x[1][0].item() for x in result['G_PAG_FDR'].items()]
+
+    return {
+        "found_correct": found_correct_pag,
+
+        "SHD": g_pag_shd,
+        "FOR": g_pag_for,
+        "FDR": g_pag_fdr,
+
+        "MEAN_SHD": sum(g_pag_shd)/len(g_pag_shd) if len(g_pag_shd) > 0 else None,
+        "MEAN_FOR": sum(g_pag_for)/len(g_pag_for) if len(g_pag_for) > 0 else None,
+        "MEAN_FDR": sum(g_pag_fdr)/len(g_pag_fdr) if len(g_pag_fdr) > 0 else None,
+
+        "MIN_SHD": min(g_pag_shd) if len(g_pag_shd) > 0 else None,
+        "MIN_FOR": min(g_pag_for) if len(g_pag_for) > 0 else None,
+        "MIN_FDR": min(g_pag_fdr) if len(g_pag_fdr) > 0 else None,
+
+        "MAX_SHD": max(g_pag_shd) if len(g_pag_shd) > 0 else None,
+        "MAX_FOR": max(g_pag_for) if len(g_pag_for) > 0 else None,
+        "MAX_FDR": max(g_pag_fdr) if len(g_pag_fdr) > 0 else None,
+    }
 
 def filter_adjacency_matrices(pag, pag_labels, filter_labels):
     # Convert to numpy arrays for easier manipulation
@@ -371,23 +439,15 @@ def evaluate_prediction(true_pag, pred_pag, true_labels, pred_labels):
 
     return shd, tp, tn, fp, fn, other, correct_edges
 
-
-def log_resultsx(target_dir, target_file, name, metrics, metrics2, alpha, num_samples, num_clients):
-    result = {
-        "name": name,
-        "alpha": alpha,
-        "num_samples": num_samples,
-        "num_clients": num_clients,
-        "metrics": metrics,
-        "alternative_metrics": metrics2
-    }
-
-    with open(Path(target_dir) / target_file, "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.write(json.dumps(result) + '\n')
-        fcntl.flock(f, fcntl.LOCK_UN)
-
-def log_results(target_dir, target_file, metrics, metrics_pvalagg, alpha, num_samples, num_clients):
+def log_results(
+    target_dir,
+    target_file,
+    metrics,
+    metrics_pvalagg,
+    alpha,
+    num_samples,
+    num_clients
+):
     result = {
         "alpha": alpha,
         "num_samples": num_samples,
@@ -402,140 +462,13 @@ def log_results(target_dir, target_file, metrics, metrics_pvalagg, alpha, num_sa
         fcntl.flock(f, fcntl.LOCK_UN)
 
 
-
-### sklearn metrics
-import numpy as np
-from sklearn.metrics import confusion_matrix
-import pandas as pd
-
-def calculate_pag_metrics(true_pag, predicted_pags, true_labels, predicted_labels_list):
-    metrics_list = []
-
-    def adjacency_matrix_to_edges(matrix, labels):
-        """ Convert adjacency matrix to edge list with label ordering """
-        n = len(labels)
-        edges = []
-        for i in range(n):
-            for j in range(i+1, n):
-                if matrix[i, j] > 0:  # if there is a directed edge
-                    edges.append((labels[i], labels[j]))
-                if matrix[j, i] > 0:  # for undirected edges
-                    edges.append((labels[j], labels[i]))
-        return set(edges)
-
-    def structural_hamming_distance(edges_true, edges_pred):
-        """ Structural Hamming Distance """
-        return len(edges_true.symmetric_difference(edges_pred)) / len(edges_true.union(edges_pred))
-
-    def false_discovery_rate(edges_true, edges_pred):
-        """ False Discovery Rate """
-        fp = len(edges_pred - edges_true)
-        tp = len(edges_true & edges_pred)
-        return fp / (fp + tp) if (fp + tp) > 0 else 0
-
-    def false_omission_rate(edges_true, edges_pred):
-        """ False Omission Rate """
-        fn = len(edges_true - edges_pred)
-        tn = len(edges_true.union(edges_pred)) - len(edges_true & edges_pred)
-        return fn / (fn + tn) if (fn + tn) > 0 else 0
-
-    for pag, predicted_labels in zip(predicted_pags, predicted_labels_list):
-        edges_true = adjacency_matrix_to_edges(true_pag, true_labels)
-        edges_pred = adjacency_matrix_to_edges(pag, predicted_labels)
-
-        shd = structural_hamming_distance(edges_true, edges_pred)
-        fdr = false_discovery_rate(edges_true, edges_pred)
-        for_ = false_omission_rate(edges_true, edges_pred)
-
-        # Calculating precision, recall, and F1-score
-        true_positive = len(edges_true & edges_pred)
-        false_positive = len(edges_pred - edges_true)
-        false_negative = len(edges_true - edges_pred)
-        true_negative = len(edges_true.union(edges_pred)) - true_positive
-
-        precision = true_positive / (true_positive + false_positive) if (true_positive + false_positive) > 0 else 0
-        recall = true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
-        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-
-        metrics = {
-            "SHD": shd,
-            "FDR": fdr,
-            "FOR": for_,
-            "Precision": precision,
-            "Recall": recall,
-            "F1_Score": f1_score
-        }
-
-        metrics_list.append(metrics)
-
-    return metrics_list
-
-## MORE METRIC ATTEMPTS
-import numpy as np
-from sklearn.metrics import precision_score, recall_score, f1_score
-
-def reorder_adjacency_matrix(adj_matrix, variables, target_variables):
-    """
-    Reorder adjacency matrix based on target variable order.
-    """
-    index_map = {var: idx for idx, var in enumerate(variables)}
-    reorder_indices = [index_map[var] for var in target_variables]
-    reordered_matrix = adj_matrix[np.ix_(reorder_indices, reorder_indices)]
-    return reordered_matrix
-
-def _compare_pags(matrix1, variables1, matrix2, variables2):
-    """
-    Compare two PAGs and compute SHD, precision, recall, and F1 score.
-    """
-    # Convert to numpy arrays
-    matrix1 = np.array(matrix1)
-    matrix2 = np.array(matrix2)
-
-    # Reorder matrices to match variable order
-    matrix1 = reorder_adjacency_matrix(matrix1, variables1, variables2)
-
-    # Compute SHD
-    shd = np.sum(matrix1 != matrix2).item()
-
-    # Flatten and compare edges of different types
-    flat1 = matrix1.flatten()
-    flat2 = matrix2.flatten()
-
-    metrics = {}
-    for edge_type, label in [(1, "Dot Head"), (2, "Arrow Head"), (3, "Tail")]:
-        mask = (flat1 == edge_type) | (flat2 == edge_type)  # Only compare relevant edges
-        y_true = flat1[mask] == edge_type
-        y_pred = flat2[mask] == edge_type
-
-        precision = precision_score(y_true, y_pred, zero_division=np.nan)
-        recall = recall_score(y_true, y_pred, zero_division=np.nan)
-        f1 = f1_score(y_true, y_pred, zero_division=np.nan)
-
-        metrics[label] = {
-            "Precision": precision if not np.isnan(precision) else None,
-            "Recall": recall if not np.isnan(recall) else None,
-            "F1_Score": f1 if not np.isnan(f1) else None,
-        }
-
-    return {
-        "SHD": shd,
-        "Edge_Type_Metrics": metrics,
-    }
-
-def compare_pags(true_pag, true_labels, pred_pags, pred_labels):
-    metrics = []
-    for pred_pag, _pred_labels in zip(pred_pags, pred_labels):
-        metric = _compare_pags(true_pag, true_labels, pred_pag, _pred_labels)
-        metrics.append(metric)
-    return metrics
-
 test_setups = list(zip(truePAGs, subsetsList))
 
-NUM_TESTS = 10
+NUM_TESTS = 1
 ALPHA = 0.05
 
 #test_setups = test_setups[5:10]
-data_dir = './experiments/simulation/pvalagg_vs_fedci'
+data_dir = './experiments/simulation/pvalagg_vs_fedci3'
 data_file_pattern = '{}-{}-{}.ndjson'
 
 import datetime
@@ -547,25 +480,9 @@ data_file_pattern = str(now) + '-' + data_file_pattern
 def run_comparison(setup):
     idx, data_dir, data_file_pattern, test_setup, num_samples, num_clients = setup
     data_file = data_file_pattern.format(idx, num_samples, num_clients)
+    raw_true_pag = test_setup[0]
     (true_pag, all_labels), client_data = get_data(test_setup, num_samples, num_clients)
 
-    #x = [d.with_columns(client_id=pl.lit(i)) for i, d in enumerate(client_data)]
-    #pl.concat(x, how='diagonal').write_parquet('test_data.parquet')
-
-    # x = pl.read_parquet('test_data.parquet')
-    # client_data = x.partition_by('client_id')
-    # #df.select(pl.all().is_null().all()).unpivot().filter(pl.col('value') == False)['variable'].to_list()
-    # client_data = [
-    #     d.select(d.drop('client_id').select(pl.all().is_null().all()).unpivot().filter(pl.col('value') == False)['variable'].to_list())
-    #     for d in client_data
-    # ]
-    # from functools import reduce
-    # #union_result = reduce(lambda x, y: x.union(y), list_of_sets)
-    # all_labels = sorted(list(reduce(lambda x, y: x.union(y), [set(d.columns) for d in client_data])))
-
-    #print('start')
-
-    #print('setup fedci')
     server = setup_server(client_data)
 
     results_fedci = server.run()
@@ -573,70 +490,50 @@ def run_comparison(setup):
     client_labels = {id: sorted(list(schema.keys())) for id, schema in server.client_schemas.items()}
     df_fedci = server_results_to_dataframe(all_labels_fedci, results_fedci)
 
-    #print('iod fedci')
-    pag_list, pag_labels, _, _ = run_riod(df_fedci, all_labels_fedci, client_labels, ALPHA)
-
-    #print('metrics fedci')
-    metrics = calculate_pag_metrics(
-        np.array(true_pag),
-        [np.array(p) for p in pag_list],
+    metrics = run_riod(
+        raw_true_pag,
         all_labels,
-        pag_labels
-    )
-    # metrics2 = compare_pags(
-    #     true_pag,
-    #     all_labels,
-    #     pag_list,
-    #     pag_labels
-    # )
+        df_fedci,
+        all_labels_fedci,
+        client_labels,
+        ALPHA)
 
-    #print('log fedci')
-    #log_results(data_dir, data_file, 'fedci', metrics, metrics2, ALPHA, num_samples, num_clients)
+    def run_client(client_data):
+        #print(client_data)
+        #print(client_data.group_by(cs.boolean() | cs.string() | cs.integer()).len())
+        server = fedci.Server({'1': fedci.Client(client_data)})
+        results = server.run()
+        client_labels = sorted(client_data.columns)
+        df = server_results_to_dataframe(client_labels, results)
+        return df, client_labels
+
 
     ## Run p val agg IOD
-    #print('setup pvalagg')
-    client_ci_info = []
-    #for i,d in enumerate(client_data):
-    #    print(f'=== {i}')
-    #    d.write_parquet('test_subdata.parquet')
-    #    client_ci_info.append(mxm_ci_test(d))
-    client_ci_info = [mxm_ci_test(d) for d in client_data]
-    #print('setup done pvalagg')
-    #client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
-    #client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
-    client_ci_dfs, client_ci_labels = zip(*client_ci_info)
+    #client_ci_info = [mxm_ci_test(d) for d in client_data]
+    # since use of own CI test, this throws errors on small sample sizes
+    try:
+        client_ci_info = [run_client(d) for d in client_data]
+        client_ci_dfs, client_ci_labels = zip(*client_ci_info)
 
-    #print('iod pvalagg')
-    pag_list, pag_labels, _, _ = run_pval_agg_iod(
-        list(client_labels.keys()),
-        client_ci_dfs,
-        client_ci_labels,
-        ALPHA
-    )
+        metrics_pvalagg = run_pval_agg_iod(
+            raw_true_pag,
+            all_labels,
+            list(client_labels.keys()),
+            client_ci_dfs,
+            client_ci_labels,
+            ALPHA
+        )
+    except:
+        metrics_pvalagg = None
 
-    #print('metrics pvalagg')
-    metrics_pvalagg = calculate_pag_metrics(
-        np.array(true_pag),
-        [np.array(p) for p in pag_list],
-        all_labels,
-        pag_labels
-    )
-    # metrics2 = compare_pags(
-    #     true_pag,
-    #     all_labels,
-    #     pag_list,
-    #     pag_labels
-    # )
+    #print(found_correct_pag_fedci, found_correct_pag_pvalagg)
 
-    # TODO: one log for both, to match results on same data
-
-    #print('log pvalagg')
-    # log metrics
-    #log_results(data_dir, data_file, 'p_val_agg', metrics, metrics2, ALPHA, num_samples, num_clients)
     log_results(data_dir, data_file, metrics, metrics_pvalagg, ALPHA, num_samples, num_clients)
 
 num_clients_options = [3,5,10]
-num_samples_options = [50,100,250,500]
+num_samples_options = [200,500,1000]
+
+#pl.Config.set_tbl_rows(20)
 
 configurations = list(itertools.product(test_setups, num_samples_options, num_clients_options))
 
@@ -646,82 +543,10 @@ configurations = [(i,) + c for i in range(NUM_TESTS) for c in configurations]
 
 from tqdm.contrib.concurrent import process_map
 
+#from fedci.env import OVR, EXPAND_ORDINALS
+#print(OVR, EXPAND_ORDINALS)
+
 #for configuration in tqdm(configurations):
 #    run_comparison(configuration)
 
 process_map(run_comparison, configurations, max_workers=10, chunksize=3)
-
-# for _ in range(NUM_TESTS):
-#     now = int(datetime.datetime.utcnow().timestamp()*1e3)
-#     data_file = data_file_pattern.format(now)
-#     for num_clients in [3,5,10]:
-#         for num_samples in [50,100,250,500]:
-#             for test_setup in tqdm(test_setups, desc='Running Simulation'):
-#                 (true_pag, all_labels), client_data = get_data(test_setup, num_samples, num_clients)
-
-#                 x = [d.with_columns(client_id=pl.lit(i)) for i, d in enumerate(client_data)]
-#                 pl.concat(x, how='diagonal').write_parquet('test_data.parquet')
-
-#                 # x = pl.read_parquet('test_data.parquet')
-#                 # client_data = x.partition_by('client_id')
-#                 # #df.select(pl.all().is_null().all()).unpivot().filter(pl.col('value') == False)['variable'].to_list()
-#                 # client_data = [
-#                 #     d.select(d.drop('client_id').select(pl.all().is_null().all()).unpivot().filter(pl.col('value') == False)['variable'].to_list())
-#                 #     for d in client_data
-#                 # ]
-#                 # print(client_data[0])
-#                 # from functools import reduce
-#                 # #union_result = reduce(lambda x, y: x.union(y), list_of_sets)
-#                 # all_labels = sorted(list(reduce(lambda x, y: x.union(y), [set(d.columns) for d in client_data])))
-
-
-#                 #print('start')
-
-#                 #print('setup fedci')
-#                 server = setup_server(client_data)
-
-#                 results_fedci = server.run()
-#                 all_labels_fedci = sorted(list(server.schema.keys()))
-#                 client_labels = {id: sorted(list(schema.keys())) for id, schema in server.client_schemas.items()}
-#                 df_fedci = server_results_to_dataframe(all_labels_fedci, results_fedci)
-
-#                 #print('iod fedci')
-#                 pag_list, pag_labels, _, _ = run_riod(df_fedci, all_labels_fedci, client_labels, ALPHA)
-
-#                 #print('metrics fedci')
-#                 metrics = calculate_pag_metrics(
-#                     np.array(true_pag),
-#                     [np.array(p) for p in pag_list],
-#                     all_labels,
-#                     pag_labels
-#                 )
-
-#                 #print('log fedci')
-#                 log_results(data_dir, data_file, 'fedci', metrics, ALPHA, num_samples, num_clients)
-
-#                 ## Run p val agg IOD
-#                 #print('setup pvalagg')
-#                 client_ci_info = [mxm_ci_test(d) for d in client_data]
-#                 #client_A_ci_df, client_A_labels = mxm_ci_test(client_A_data)
-#                 #client_B_ci_df, client_B_labels = mxm_ci_test(client_B_data)
-#                 client_ci_dfs, client_ci_labels = zip(*client_ci_info)
-
-#                 #print('iod pvalagg')
-#                 pag_list, pag_labels, _, _ = run_pval_agg_iod(
-#                     list(client_labels.keys()),
-#                     client_ci_dfs,
-#                     client_ci_labels,
-#                     ALPHA
-#                 )
-
-#                 #print('metrics pvalagg')
-#                 metrics = calculate_pag_metrics(
-#                     np.array(true_pag),
-#                     [np.array(p) for p in pag_list],
-#                     all_labels,
-#                     pag_labels
-#                 )
-
-#                 #print('log pvalagg')
-#                 # log metrics
-#                 log_results(data_dir, data_file, 'p_val_agg', metrics, ALPHA, num_samples, num_clients)
