@@ -102,7 +102,7 @@ class BinaryNode(Node):
         super().__init__(name, parents)
 
     def _calc(self, num_samples):
-        quantiles = get_quantiles(2, 0.3)
+        quantiles = get_quantiles(2, 0.2)
         return to_categorical(super()._calc(num_samples), quantiles).cast(pl.Int32) == 1
 
 class GenericNode(Node):

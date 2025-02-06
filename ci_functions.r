@@ -11,6 +11,24 @@ library(rIOD)
 #n_cores <- 8
 #plan("multicore", workers = n_cores, gc=TRUE)
 
+get_data <- function(true_pag_amat, num_samples, variable_levels) {
+  f.args <- list()
+  cols <- colnames(true_pag_amat)
+  for (vari in 1:length(cols)) {
+      var_name <- colnames(true_pag_amat)[vari]
+      f.args[[var_name]] <- list(levels = variable_levels[vari])
+    }
+
+  print(f.args)
+
+  dat_out <- FCI.Utils::generateDatasetFromPAG(apag = true_pag_amat,
+    N=num_samples,
+    type = "mixed",
+    f.args = f.args
+  )
+  dat_out
+}
+
 run_ci_test <- function(data, max_cond_set_cardinality, filedir, filename) {
   labels <- colnames(data)
   indepTest <- mixedCITest
@@ -49,7 +67,9 @@ aggregate_ci_results <- function(true_pag_amat, true_pag_cols, labelList_, ci_da
     iod_out$G_PAG_SHD <- list()
     iod_out$G_PAG_FDR <- list()
     iod_out$G_PAG_FOR <- list()
+    print(true_pag_amat)
     for (gpag in iod_out$G_PAG_List) {
+      print(gpag)
       iod_out$G_PAG_Label_List[[index]] <- colnames(gpag)
 
       posneg_metrics <- getPAGPosNegMetrics(true_pag_amat, gpag)
@@ -85,7 +105,9 @@ iod_on_ci_data <- function(true_pag_amat, true_pag_cols, labelList_, suffStat, a
     iod_out$G_PAG_SHD <- list()
     iod_out$G_PAG_FDR <- list()
     iod_out$G_PAG_FOR <- list()
+    print(true_pag_amat)
     for (gpag in iod_out$G_PAG_List) {
+      print(gpag)
       iod_out$G_PAG_Label_List[[index]] <- colnames(gpag)
 
       posneg_metrics <- getPAGPosNegMetrics(true_pag_amat, gpag)

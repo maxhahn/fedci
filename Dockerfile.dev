@@ -64,6 +64,10 @@ RUN R -e "packages <- readLines('/tmp/requirements.r'); \
 COPY install_mxm.r /tmp/install_mxm.r
 RUN Rscript /tmp/install_mxm.r
 
+RUN R -e "install.packages('remotes')"
+RUN R -e "remotes::install_github('IyarLin/simMixedDAG')"
+
+
 # Install Python dependencies
 RUN python3 -m pip install --upgrade pip setuptools wheel
 COPY requirements.txt /tmp/requirements.txt

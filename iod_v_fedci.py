@@ -23,8 +23,8 @@ import fedci
 
 # supress R log
 import rpy2.rinterface_lib.callbacks as cb
-cb.consolewrite_print = lambda x: None
-cb.consolewrite_warnerror = lambda x: None
+#cb.consolewrite_print = lambda x: None
+#cb.consolewrite_warnerror = lambda x: None
 
 #ro.r['source']('./load_pags.r')
 #load_pags = ro.globalenv['load_pags']
@@ -39,6 +39,7 @@ cb.consolewrite_warnerror = lambda x: None
 # load local-ci script
 ro.r['source']('./ci_functions.r')
 # load function from R script
+get_data_f = ro.globalenv['get_data']
 load_pags = ro.globalenv['load_pags']
 run_ci_test_f = ro.globalenv['run_ci_test']
 aggregate_ci_results_f = ro.globalenv['aggregate_ci_results']
@@ -165,21 +166,21 @@ def get_data(test_setup, num_samples, num_clients):
         if n <= 0:
             raise ValueError("The number of splits 'n' must be greater than 0.")
 
-        # Determine the size of each split
-        num_rows = len(df)
-        split_size = num_rows // n
-        remainder = num_rows % n
+        min_perc = 0.03
+        percentiles = np.random.uniform(0,1,n)
+        percentiles = (percentiles+min_perc)
+        percentiles = percentiles/np.sum(percentiles)
+        split_percentiles = percentiles.tolist()
+        percentiles = np.cumsum(percentiles)
+        percentiles = [0] + percentiles.tolist()[:-1] + [1]
 
-        # Create the splits
         splits = []
-        start = 0
         for i in range(n):
-            # Account for the remainder rows
-            extra_row = 1 if i < remainder else 0
-            end = start + split_size + extra_row
+            start = int(percentiles[i]*len(df))
+            end = int(percentiles[i+1]*len(df))
             splits.append(df[start:end])
-            start = end
-        return splits
+
+        return splits, split_percentiles
 
     pag = floatmatrix_to_2dlist(test_setup[0])
     nc = pag_to_node_collection(pag)
@@ -193,20 +194,27 @@ def get_data(test_setup, num_samples, num_clients):
         cols_c2 = test_setup[1][1]
         cols_cx = [sorted(cols, key=lambda k: random.random())[:-1] for _ in range(num_clients-2)]
 
-        client_data = [df.select(c) for df, c in zip(split_dataframe(data, num_clients), [cols_c1, cols_c2] + cols_cx)]
+        split_dfs, split_percs = split_dataframe(data, num_clients)
+        client_data = [df.select(c) for df, c in zip(split_dfs, [cols_c1, cols_c2] + cols_cx)]
 
         is_valid = not any([split.select(fail=pl.any_horizontal((cs.boolean() | cs.string() | cs.integer()).n_unique() == 1))['fail'][0] for split in client_data])
         for d in client_data:
+            if len(d) < 5:
+                is_valid = False
+                break
             if len(d.select(cs.boolean() | cs.string() | cs.integer())) == 0:
                 continue
             if any([l < 3 for l in d.group_by(cs.boolean() | cs.string() | cs.integer()).len()['len'].to_list()]):
                 is_valid = False
                 break
-    return (pag, sorted(data.columns)), client_data
+    return (pag, sorted(data.columns)), (client_data, split_percs)
 
 def setup_server(client_data):
     # Create Clients
     clients = [fedci.Client(d) for d in client_data]
+
+    #for cd in client_data:
+    #    print(cd)
 
     # Create Server
     server = fedci.Server(
@@ -341,6 +349,7 @@ def run_riod(true_pag, true_labels, df, labels, client_labels, alpha):
         gi_pag_labels = [list(x[1]) for x in result['Gi_PAG_Label_List'].items()]
         gi_pag_list = [np.array(pag).astype(int).tolist() for pag in gi_pag_list]
 
+        #print(true_labels, labels, g_pag_labels)
         found_correct_pag = bool(result['found_correct_pag'][0])
         g_pag_shd = [x[1][0].item() for x in result['G_PAG_SHD'].items()]
         g_pag_for = [x[1][0].item() for x in result['G_PAG_FOR'].items()]
@@ -446,12 +455,14 @@ def log_results(
     metrics_pvalagg,
     alpha,
     num_samples,
-    num_clients
+    num_clients,
+    data_percs
 ):
     result = {
         "alpha": alpha,
         "num_samples": num_samples,
         "num_clients": num_clients,
+        "split_percentiles": data_percs,
         "metrics_fedci": metrics,
         "metrics_pvalagg": metrics_pvalagg
     }
@@ -464,11 +475,11 @@ def log_results(
 
 test_setups = list(zip(truePAGs, subsetsList))
 
-NUM_TESTS = 1
+NUM_TESTS = 50
 ALPHA = 0.05
 
 #test_setups = test_setups[5:10]
-data_dir = './experiments/simulation/pvalagg_vs_fedci3'
+data_dir = './experiments/simulation/pvalagg_vs_fedci5'
 data_file_pattern = '{}-{}-{}.ndjson'
 
 import datetime
@@ -481,7 +492,26 @@ def run_comparison(setup):
     idx, data_dir, data_file_pattern, test_setup, num_samples, num_clients = setup
     data_file = data_file_pattern.format(idx, num_samples, num_clients)
     raw_true_pag = test_setup[0]
-    (true_pag, all_labels), client_data = get_data(test_setup, num_samples, num_clients)
+
+
+    # test get data
+
+    labels = sorted(list(set(test_setup[1][0] + test_setup[1][1])))
+    potential_var_types = {'continuos': [1], 'binary': [2], 'ordinal': [3,4], 'nominal': [3,4]}
+    var_types = {}
+    var_levels = []
+    for label in labels:
+        var_type = random.choice(list(potential_var_types.keys()))
+        var_types[label] = var_type
+        var_levels += [random.choice(potential_var_types[var_type])]
+    dat = get_data_f(raw_true_pag, 1000, var_levels)
+    print(dat)
+
+
+    # #
+
+
+    (true_pag, all_labels), (client_data, data_percs) = get_data(test_setup, num_samples, num_clients)
 
     server = setup_server(client_data)
 
@@ -499,8 +529,6 @@ def run_comparison(setup):
         ALPHA)
 
     def run_client(client_data):
-        #print(client_data)
-        #print(client_data.group_by(cs.boolean() | cs.string() | cs.integer()).len())
         server = fedci.Server({'1': fedci.Client(client_data)})
         results = server.run()
         client_labels = sorted(client_data.columns)
@@ -509,10 +537,11 @@ def run_comparison(setup):
 
 
     ## Run p val agg IOD
-    #client_ci_info = [mxm_ci_test(d) for d in client_data]
+
     # since use of own CI test, this throws errors on small sample sizes
     try:
-        client_ci_info = [run_client(d) for d in client_data]
+        client_ci_info = [mxm_ci_test(d) for d in client_data]
+        #client_ci_info = [run_client(d) for d in client_data]
         client_ci_dfs, client_ci_labels = zip(*client_ci_info)
 
         metrics_pvalagg = run_pval_agg_iod(
@@ -528,10 +557,10 @@ def run_comparison(setup):
 
     #print(found_correct_pag_fedci, found_correct_pag_pvalagg)
 
-    log_results(data_dir, data_file, metrics, metrics_pvalagg, ALPHA, num_samples, num_clients)
+    #log_results(data_dir, data_file, metrics, metrics_pvalagg, ALPHA, num_samples, num_clients, data_percs)
 
 num_clients_options = [3,5,10]
-num_samples_options = [200,500,1000]
+num_samples_options = [300,500,1000]
 
 #pl.Config.set_tbl_rows(20)
 
@@ -546,7 +575,7 @@ from tqdm.contrib.concurrent import process_map
 #from fedci.env import OVR, EXPAND_ORDINALS
 #print(OVR, EXPAND_ORDINALS)
 
-#for configuration in tqdm(configurations):
-#    run_comparison(configuration)
+for configuration in tqdm(configurations):
+    run_comparison(configuration)
 
-process_map(run_comparison, configurations, max_workers=10, chunksize=3)
+#process_map(run_comparison, configurations, max_workers=10, chunksize=3)

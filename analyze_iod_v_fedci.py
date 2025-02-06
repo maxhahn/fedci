@@ -5,17 +5,23 @@ pl.Config.set_tbl_rows(100)
 
 # TODO: get containsTheTrueGraph in temp.r and return it
 
-json_file = "experiments/simulation/pvalagg_vs_fedci3/*.ndjson"
+json_file = "experiments/simulation/pvalagg_vs_fedci5/*.ndjson"
 #schema = pl.read_ndjson("experiments/simulation/pvalagg_vs_fedci3/*-0-500-3.ndjson").schema
 df = pl.read_ndjson(json_file)#, schema=schema)
 print(len(df))
-print(df)
+#ValueError: zero-size array to reduction operation maximum which has no identity
+
+#print(df)
 #df = pl.scan_ndjson(json_file).with_columns(pl.col('metrics_fedci').fill_null(pl.struct())).collect()
 grouping_keys = ['num_samples', 'num_clients', 'alpha']
 
+df = df.drop('split_percentiles')
+
+
+df = df.with_columns(has_prediction_fedci=pl.col('metrics_fedci').struct.field('SHD').list.len() > 0)
+df = df.with_columns(has_prediction_pvalagg=pl.col('metrics_pvalagg').struct.field('SHD').list.len() > 0)
+
 dfx = df
-dfx = dfx.with_columns(has_prediction_fedci=pl.col('metrics_fedci').struct.field('SHD').list.len() > 0)
-dfx = dfx.with_columns(has_prediction_pvalagg=pl.col('metrics_pvalagg').struct.field('SHD').list.len() > 0)
 dfx = dfx.with_columns(
     found_correct_pag_fedci=pl.col('metrics_fedci').struct.field('found_correct'),
     found_correct_pag_pvalagg=pl.col('metrics_pvalagg').struct.field('found_correct')
@@ -43,7 +49,7 @@ df = df.with_row_index()
 
 df = df.unpivot(
     on=cs.starts_with('metric_'),
-    index=['index', 'alpha', 'num_samples', 'num_clients'],
+    index=['index', 'alpha', 'num_samples', 'num_clients', 'has_prediction_fedci', 'has_prediction_pvalagg'],
     variable_name='metric'
 )
 df = df.with_columns(
@@ -111,8 +117,8 @@ plot = df.sort(
     #y=['metric_fedci_SHD_mean', 'metric_pvalagg_SHD_mean'],
     y='value',
     #alpha=0.7,
-    ylim=(-0.1,1.1),
-    xlim=(-0.1,1.1),
+    #ylim=(-0.1,1.1),
+    #xlim=(-0.1,1.1),
     height=800,
     width=800,
     row='num_clients',
@@ -123,3 +129,44 @@ plot = df.sort(
     )
 
 hvplot.save(plot, 'images/test.html')
+
+
+plot = df.sort(
+    'num_clients', 'num_samples', 'name'
+).hvplot.box(
+    by=['name', 'has_prediction_pvalagg'],
+    #y=['metric_fedci_SHD_mean', 'metric_pvalagg_SHD_mean'],
+    y='value',
+    #alpha=0.7,
+    #ylim=(-0.1,1.1),
+    #xlim=(-0.1,1.1),
+    height=800,
+    width=800,
+    row='num_clients',
+    col='num_samples',
+    groupby=['metric', 'type'],
+    subplots=True,
+    #widget_location='bottom'
+    )
+
+hvplot.save(plot, 'images/test2.html')
+
+plot = df.sort(
+    'num_clients', 'num_samples', 'name'
+).hvplot.box(
+    by=['name', 'has_prediction_fedci'],
+    #y=['metric_fedci_SHD_mean', 'metric_pvalagg_SHD_mean'],
+    y='value',
+    #alpha=0.7,
+    #ylim=(-0.1,1.1),
+    #xlim=(-0.1,1.1),
+    height=800,
+    width=800,
+    row='num_clients',
+    col='num_samples',
+    groupby=['metric', 'type'],
+    subplots=True,
+    #widget_location='bottom'
+    )
+
+hvplot.save(plot, 'images/test3.html')

@@ -76,7 +76,7 @@ class Test():
         self.max_iterations = max_iterations
 
     def is_finished(self):
-        return self.get_relative_change_in_deviance() < 1e-8 or self.iterations >= self.max_iterations
+        return self.get_change_in_deviance() < 1e-3 or self.iterations >= self.max_iterations
 
     def update_betas(self, data: Dict[str, ClientResponseData]):
         self.llf = {client_id: client_response.llf for client_id, client_response in data.items()}
@@ -123,10 +123,15 @@ class Test():
                 vars.add(var)
         return vars
 
+    def get_change_in_deviance(self):
+        if self.last_deviance is None:
+            return 1
+        return abs(self.deviance - self.last_deviance)
+
     def get_relative_change_in_deviance(self):
         if self.last_deviance is None:
             return 1
-        return abs(self.deviance - self.last_deviance) / (0.1 + abs(self.deviance))
+        return abs(self.deviance - self.last_deviance) / (1e-5 + abs(self.deviance))
 
     def __repr__(self):
         test_string = "\n\t- "  + "\n\t- ".join([str(t) for t in sorted(self.tests.values())])
