@@ -1,12 +1,12 @@
-
-
 from .client import Client
 from .testing import TestEngine
 from .env import DEBUG
 from typing import List, Dict
+import rpyc
 
 class Server():
-    def __init__(self, clients: Dict[str, Client], max_regressors=None, test_targets=None, max_iterations=25):
+    def __init__(self, clients: Dict[str, Client], max_regressors=None, test_targets=None, max_iterations=25, _network_fetch_function=lambda x: x):
+        self._network_fetch_function = _network_fetch_function
         self.clients = clients
         self.client_schemas = {}
         self.schema = {}
@@ -49,7 +49,10 @@ class Server():
             assert len(selected_clients) > 0, f'No client is able to provide the data for {required_labels}'
 
             y_label, X_labels, beta = self.test_engine.get_current_test_parameters()
+
             results = {client_id: client.compute(y_label, X_labels, beta) for client_id, client in selected_clients.items()}
+            # NOTE: fetch ClientResponseData over network if necessary
+            results = {client_id: self._network_fetch_function(result) for client_id, result in results.items()}
             self.test_engine.update_current_test(results)
         if DEBUG >= 1:
             print("*** All tests")
@@ -59,3 +62,33 @@ class Server():
 
     def get_tests(self):
         return self.test_engine.tests
+
+class ProxyServerBuilder():
+    def __init__(self, cls):
+        self.clients = []
+        self.cls = cls
+
+    def add_client(self, hostname, port):
+        if (hostname, port) in self.clients:
+            print('Client exists already')
+            return self
+        self.clients.append((hostname, port))
+        return self
+
+    def build(self):
+        return self.cls(self.clients)
+
+class ProxyServer():
+    @classmethod
+    def builder(cls):
+        return ProxyServerBuilder(cls)
+
+    def __init__(self, clients):
+        self.connections = {str(i): rpyc.connect(host,port,config={'allow_public_attrs': True, 'allow_pickle': True}) for i, (host,port) in enumerate(clients)}
+        self.clients = {i: c.root for i, c in self.connections.items()}
+        self.server = Server(self.clients, _network_fetch_function=rpyc.classic.obtain)
+
+    def run(self):
+        return self.server.run()
+    def get_tests(self):
+        return self.server.get_tests()

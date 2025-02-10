@@ -154,10 +154,6 @@ def run_test_on_data(dgp_nodes,
                      test_targets=None,
                      partition_ratios=None
                      ):
-    if DEBUG >= 1:
-        print("*** Data schema")
-        for col, dtype in sorted(data.schema.items(), key=lambda x: x[0]):
-            print(f"{col} - {dtype}")
 
     if LOG_R == 0:
         cb.consolewrite_print = lambda x: None
@@ -165,6 +161,11 @@ def run_test_on_data(dgp_nodes,
 
     #client_data_chunks = [chunk  for chunk in partition_dataframe(data, num_clients, partition_ratios)]
     data, client_data_chunks, split_percentages = partition_dataframe_advanced(dgp_nodes, num_samples, num_clients)
+
+    if DEBUG >= 1:
+        print("*** Data schema")
+        for col, dtype in sorted(data.schema.items(), key=lambda x: x[0]):
+            print(f"{col} - {dtype}")
 
     clients = {i:Client(chunk) for i, chunk in enumerate(client_data_chunks)}
     server = Server(

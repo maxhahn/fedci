@@ -1,9 +1,9 @@
-from holoviews.core.ndmapping import asdim
 from scipy.sparse.linalg._eigen.lobpcg.lobpcg import LinAlgError
 from .utils import VariableType, ClientResponseData, BetaUpdateData
 import polars as pl
 import numpy as np
 import scipy
+import rpyc
 
 from typing import Dict, List
 
@@ -311,7 +311,8 @@ regression_computation_map = {
 }
 
 class Client():
-    def __init__(self, data: pl.DataFrame):
+    def __init__(self, data: pl.DataFrame, _network_fetch_function=lambda x: x):
+        self._network_fetch_function = _network_fetch_function
         self.data: pl.DataFrame = data
         self.schema: Dict[str, VariableType] = {column: polars_dtype_map[dtype] for column, dtype in dict(self.data.schema).items()}
         self.categorical_expressions: Dict[str, List[str]] = {column: self.data.select(column).to_dummies(separator='__cat__').columns
@@ -336,7 +337,6 @@ class Client():
         categorical_expressions: Dict[str, List[str]],
         ordinal_expressions: Dict[str, List[str]]
     ):
-
         self.server_categorical_expressions = categorical_expressions
         self.server_ordinal_expressions = ordinal_expressions
 
@@ -361,6 +361,8 @@ class Client():
         self.expanded_data = _data
 
     def compute(self, y_label: str, X_labels, beta):
+        # NOTE: preemptive cast for netref arrays
+        beta = self._network_fetch_function(beta)
         assert y_label in self.schema
 
         result = regression_computation_map[self.schema[y_label]].compute(self.expanded_data, y_label, X_labels, beta)
@@ -378,5 +380,16 @@ class Client():
                 deviance=result['deviance'],
                 beta_update_data=beta_update_data
             )
-
         return response
+
+class ProxyClient(rpyc.Service):
+    def __init__(self, data):
+        self.client = Client(data, _network_fetch_function=rpyc.classic.obtain)
+    def start(self, port):
+        server = rpyc.utils.server.ThreadedServer(self, port=port, protocol_config={'allow_public_attrs': True, 'allow_pickle': True})
+        server.start()
+
+    def on_connect(self, conn):
+        for name in dir(self.client):
+            if callable(getattr(self.client, name)) and not name.startswith("_"):
+                setattr(self, f"exposed_{name}", getattr(self.client, name))
