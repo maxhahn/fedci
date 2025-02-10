@@ -8,8 +8,8 @@ library(doFuture)
 library(gtools)
 library(rIOD)
 
-n_cores <- 8
-plan("multicore", workers = n_cores, gc=TRUE)
+#n_cores <- 8
+#plan("multicore", workers = n_cores, gc=TRUE)
 
 labelList <- list()
 

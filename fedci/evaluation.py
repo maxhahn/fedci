@@ -2,6 +2,7 @@ from .testing import Test
 from .env import DEBUG
 
 import scipy
+import numpy as np
 import polars as pl
 import polars.selectors as cs
 import rpy2.robjects as ro
@@ -178,6 +179,8 @@ def _transform_dataframe(df):
     r_dataframe = base.as_data_frame(r_list)
     return r_dataframe
 
+ro.r['source']('./ci_functions.r')
+run_ci_test_f = ro.globalenv['run_ci_test']
 def get_riod_tests(data, max_regressors=None, test_targets=None):
     if max_regressors is None:
         max_regressors = 999
@@ -186,8 +189,6 @@ def get_riod_tests(data, max_regressors=None, test_targets=None):
     ground_truth_tests = []
 
     with (ro.default_converter + pandas2ri.converter).context():
-        ro.r['source']('./local-ci.r')
-        run_ci_test_f = ro.globalenv['run_ci_test']
         df_r = _transform_dataframe(data.with_columns(cs.boolean().cast(pl.Utf8)).to_pandas())
 
         # delete potentially existing file
@@ -216,26 +217,38 @@ def get_riod_tests(data, max_regressors=None, test_targets=None):
     if test_targets is not None:
         ground_truth_tests = [t for t in ground_truth_tests if (t.v0, t.v1, tuple(sorted(t.conditioning_set))) in test_targets]
 
-    return ground_truth_tests
+    return sorted(ground_truth_tests)
 
-def compare_tests_to_truth(tests: List[SymmetricLikelihoodRatioTest], ground_truth_tests: List[SymmetricLikelihoodRatioTest], test_targets):
+def fisher_test_combination(tests: List[List[SymmetricLikelihoodRatioTest]]):
+    tests = list(zip(*tests))
+    results = []
+    for _tests in tests:
+        v0 = _tests[0].v0
+        v1 = _tests[0].v1
+        conditioning_set = _tests[0].conditioning_set
+        assert all([t.v0 == v0 and t.v1 == v1 and t.conditioning_set == conditioning_set for t in _tests]), 'Unmatched tests found'
+        p_values = [t.p_val for t in _tests]
+        stat = -2 * np.sum(np.log(np.clip(np.array(p_values), 1e-12, 1)))
+        new_p_val = scipy.stats.chi2.sf(stat, 2*len(p_values))
+        results.append(EmptyLikelihoodRatioTest(v0, v1, conditioning_set, new_p_val))
+    return results
+
+def compare_tests_to_truth(
+    federated_tests: List[SymmetricLikelihoodRatioTest],
+    fisher_tests: List[SymmetricLikelihoodRatioTest],
+    ground_truth_tests: List[SymmetricLikelihoodRatioTest],
+    test_targets
+):
     p_values = []
-    for test in tests:
-        gt_test = [t for t in ground_truth_tests if t == test]
-        assert len(gt_test) == 1, 'Exactly one match expected'
-        gt_test = gt_test[0]
-        p_values.append((test.p_val, gt_test.p_val))
+    for gt_test in ground_truth_tests:
+        fed_test = [t for t in federated_tests if t == gt_test]
+        assert len(fed_test) == 1, 'Exactly one match expected'
+        fed_test = fed_test[0]
 
-    # assert len(tests) == len(ground_truth_tests), f'Number of tests do not match: {len(tests)} != {len(ground_truth_tests)}'
-    # p_values = []
-    # for test, gt_test in zip(sorted(tests), sorted(ground_truth_tests)):
-    #     if test != gt_test:
-    #         raise Exception('Mismatched tests in sorted zip. This should not happen when all tests are present.')
-    #     if DEBUG >= 2 or (DEBUG >= 1 and test.p_val != gt_test.p_val):
-    #         print('***')
-    #         print(f'Ground Truth:\n{gt_test}')
-    #         print('---')
-    #         print(f'Prediction:\n{test}')
-    #     p_values.append((test.p_val, gt_test.p_val))
-    # assert len(p_values) > 0, 'No tests left'
-    return [p_vals[0] for p_vals in p_values], [p_vals[1] for p_vals in p_values]
+        fisher_test = [t for t in fisher_tests if t == gt_test]
+        assert len(fisher_test) == 1, 'Exactly one match expected'
+        fisher_test = fisher_test[0]
+
+        p_values.append((fed_test.p_val, fisher_test.p_val, gt_test.p_val))
+
+    return list(zip(*p_values))

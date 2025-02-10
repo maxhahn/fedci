@@ -5,11 +5,10 @@ pl.Config.set_tbl_rows(100)
 
 # TODO: get containsTheTrueGraph in temp.r and return it
 
-json_file = "experiments/simulation/pvalagg_vs_fedci5/*.ndjson"
-#schema = pl.read_ndjson("experiments/simulation/pvalagg_vs_fedci3/*-0-500-3.ndjson").schema
+json_file = "experiments/simulation/pvalagg_vs_fedci/*.ndjson"
+#schema = pl.read_ndjson("experiments/simulation/pvalagg_vs_fedci/1738847995495-0-300-3.ndjson").schema
 df = pl.read_ndjson(json_file)#, schema=schema)
 print(len(df))
-#ValueError: zero-size array to reduction operation maximum which has no identity
 
 #print(df)
 #df = pl.scan_ndjson(json_file).with_columns(pl.col('metrics_fedci').fill_null(pl.struct())).collect()

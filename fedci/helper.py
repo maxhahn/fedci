@@ -7,14 +7,58 @@ from pathlib import Path
 import numpy as np
 import random
 
+import polars as pl
+import polars.selectors as cs
+
 from dgp import NodeCollection
 
 from .server import Server
 from .client import Client
-from .evaluation import get_symmetric_likelihood_tests, get_riod_tests, compare_tests_to_truth
+from .evaluation import get_symmetric_likelihood_tests, get_riod_tests, compare_tests_to_truth, fisher_test_combination
 from .env import DEBUG, EXPAND_ORDINALS, LOG_R, LR, RIDGE
 
 import rpy2.rinterface_lib.callbacks as cb
+
+def partition_dataframe_advanced(dgp_nodes, n_samples, n_clients):
+    def split_dataframe(df, n):
+        if n <= 0:
+            raise ValueError("The number of splits 'n' must be greater than 0.")
+
+        min_perc = 0.03
+        percentiles = np.random.uniform(0,1,n)
+        percentiles = (percentiles+min_perc)
+        percentiles = percentiles/np.sum(percentiles)
+        split_percentiles = percentiles.tolist()
+        percentiles = np.cumsum(percentiles)
+        percentiles = [0] + percentiles.tolist()[:-1] + [1]
+
+        splits = []
+        for i in range(n):
+            start = int(percentiles[i]*len(df))
+            end = int(percentiles[i+1]*len(df))
+            splits.append(df[start:end])
+
+        return splits, split_percentiles
+
+    is_valid = False
+    while not is_valid:
+        df = dgp_nodes.reset().get(n_samples)
+        client_data, split_percs = split_dataframe(df, n_clients)
+
+        is_valid = not any([split.select(fail=pl.any_horizontal((cs.boolean() | cs.string() | cs.integer()).n_unique() == 1))['fail'][0] for split in client_data])
+        if not is_valid:
+            continue
+
+        for d in client_data:
+            if len(d) < 5:
+                is_valid = False
+                break
+            if len(d.select(cs.boolean() | cs.string() | cs.integer())) == 0:
+                continue
+            if any([l < 3 for l in d.group_by(cs.boolean() | cs.string() | cs.integer()).len()['len'].to_list()]):
+                is_valid = False
+                break
+    return df, client_data, split_percs
 
 def partition_dataframe(df, n, partition_ratios):
     assert partition_ratios is None or (sum(partition_ratios) == 1 and len(partition_ratios) == n), 'Malformed partition_ratios'
@@ -84,10 +128,11 @@ def run_test(dgp_nodes: NodeCollection,
 
     dgp_nodes = copy.deepcopy(dgp_nodes)
 
-    dgp_nodes.reset()
-    data = dgp_nodes.get(num_samples)
+    #dgp_nodes.reset()
+    #data = dgp_nodes.get(num_samples)
 
-    return run_test_on_data(data,
+    return run_test_on_data(dgp_nodes,
+                            num_samples,
                             dgp_nodes.name,
                             num_clients,
                             target_directory,
@@ -98,7 +143,8 @@ def run_test(dgp_nodes: NodeCollection,
                             partition_ratios=partition_ratios
                             )
 
-def run_test_on_data(data,
+def run_test_on_data(dgp_nodes,
+                     num_samples,
                      data_name,
                      num_clients,
                      target_directory,
@@ -117,7 +163,10 @@ def run_test_on_data(data,
         cb.consolewrite_print = lambda x: None
         cb.consolewrite_warnerror = lambda x: None
 
-    clients = {i:Client(chunk) for i, chunk in enumerate(partition_dataframe(data, num_clients, partition_ratios))}
+    #client_data_chunks = [chunk  for chunk in partition_dataframe(data, num_clients, partition_ratios)]
+    data, client_data_chunks, split_percentages = partition_dataframe_advanced(dgp_nodes, num_samples, num_clients)
+
+    clients = {i:Client(chunk) for i, chunk in enumerate(client_data_chunks)}
     server = Server(
         clients,
         max_regressors=max_regressors,
@@ -127,13 +176,13 @@ def run_test_on_data(data,
 
     server.run()
 
-    likelihood_ratio_tests = get_symmetric_likelihood_tests(server.get_tests(), test_targets=test_targets)
+    fed_tests = get_symmetric_likelihood_tests(server.get_tests(), test_targets=test_targets)
     baseline_tests = get_riod_tests(data, max_regressors=max_regressors, test_targets=test_targets)
-    predicted_p_values, baseline_p_values = compare_tests_to_truth(likelihood_ratio_tests, baseline_tests, test_targets)
+    fisher_tests = [get_riod_tests(d, max_regressors=max_regressors, test_targets=test_targets) for d in client_data_chunks]
 
-    #if not all([abs(a-b) < 0.3 for a,b in zip(predicted_p_values, baseline_p_values)]):
-    #    data.write_parquet(f'error-data-{seed}.parquet')
-    #assert all([abs(a-b) < 0.3 for a,b in zip(predicted_p_values, baseline_p_values)])
+    fisher_tests = fisher_test_combination(fisher_tests)
+
+    federated_p_values, fisher_p_values, baseline_p_values = compare_tests_to_truth(fed_tests, fisher_tests, baseline_tests, test_targets)
 
     result = {
         'name': data_name,
@@ -144,12 +193,14 @@ def run_test_on_data(data,
         'lr': LR,
         'ridge': RIDGE,
         'seed': seed,
-        'predicted_p_values': predicted_p_values,
+        'fisher_p_values': fisher_p_values,
+        'federated_p_values': federated_p_values,
         'baseline_p_values': baseline_p_values,
-        'test_targets': test_targets
+        'test_targets': test_targets,
+        'split_percentages': split_percentages
     }
 
     if DEBUG == 0:
         write_result(result, target_directory, target_file)
 
-    return list(zip(sorted(likelihood_ratio_tests), sorted(baseline_tests)))
+    return list(zip(sorted(fed_tests), sorted(fisher_tests), sorted(baseline_tests)))

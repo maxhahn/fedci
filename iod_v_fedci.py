@@ -23,8 +23,8 @@ import fedci
 
 # supress R log
 import rpy2.rinterface_lib.callbacks as cb
-#cb.consolewrite_print = lambda x: None
-#cb.consolewrite_warnerror = lambda x: None
+cb.consolewrite_print = lambda x: None
+cb.consolewrite_warnerror = lambda x: None
 
 #ro.r['source']('./load_pags.r')
 #load_pags = ro.globalenv['load_pags']
@@ -161,6 +161,37 @@ def pag_to_node_collection(pag):
     nc = random.choice(ncs)
     return nc.reset()
 
+
+def get_dataframe_from_r(test_setup, num_samples):
+    raw_true_pag = test_setup[0]
+    labels = sorted(list(set(test_setup[1][0] + test_setup[1][1])))
+    potential_var_types = {'continuous': [1], 'binary': [2], 'ordinal': [3,4], 'nominal': [3,4]}
+    var_types = {}
+    var_levels = []
+    for label in labels:
+        var_type = random.choice(list(potential_var_types.keys()))
+        var_types[label] = var_type
+        var_levels += [random.choice(potential_var_types[var_type])]
+    dat = get_data_f(raw_true_pag, num_samples, var_levels)
+    print('---')
+    print(dat)
+    "CAN ACTUALLY BE NULL, JUST RETRY"
+    with (ro.default_converter + pandas2ri.converter).context():
+        df = ro.conversion.get_conversion().rpy2py(dat[0])
+    print(df)
+    df = pl.from_pandas(df)
+    for var_name, var_type in var_types.items():
+        if var_type == 'continuous':
+            df = df.with_columns(pl.col(var_name).cast(pl.Float64))
+        elif var_type == 'binary':
+            df = df.with_columns(pl.col(var_name) == 'A')
+        elif var_type == 'ordinal':
+            repl_dict = {'A': 1, 'B': 2, 'C': 3, 'D': 4}
+            df = df.with_columns(pl.col(var_name).cast(pl.Utf8).replace(repl_dict).cast(pl.Int32))
+        elif var_type == 'nominal':
+            df = df.with_columns(pl.col(var_name).cast(pl.Utf8))
+    return df
+
 def get_data(test_setup, num_samples, num_clients):
     def split_dataframe(df, n):
         if n <= 0:
@@ -182,12 +213,15 @@ def get_data(test_setup, num_samples, num_clients):
 
         return splits, split_percentiles
 
-    pag = floatmatrix_to_2dlist(test_setup[0])
-    nc = pag_to_node_collection(pag)
+    #pag = floatmatrix_to_2dlist(test_setup[0])
+    #nc = pag_to_node_collection(pag)
+
+    pag = test_setup[0]
 
     is_valid = False
     while not is_valid:
-        data = nc.reset().get(num_samples)
+        #data = nc.reset().get(num_samples)
+        data = get_dataframe_from_r(test_setup, num_samples)
 
         cols = data.columns
         cols_c1 = test_setup[1][0]
@@ -208,6 +242,7 @@ def get_data(test_setup, num_samples, num_clients):
                 is_valid = False
                 break
     return (pag, sorted(data.columns)), (client_data, split_percs)
+
 
 def setup_server(client_data):
     # Create Clients
@@ -254,6 +289,7 @@ def server_results_to_dataframe(labels, results):
 # Run MXM local-ci.r per Client
 
 def mxm_ci_test(df):
+    df = df.with_columns(cs.string().cast(pl.Categorical()))
     df = df.to_pandas()
     with (ro.default_converter + pandas2ri.converter).context():
         # # load local-ci script
@@ -475,11 +511,11 @@ def log_results(
 
 test_setups = list(zip(truePAGs, subsetsList))
 
-NUM_TESTS = 50
+NUM_TESTS = 10
 ALPHA = 0.05
 
 #test_setups = test_setups[5:10]
-data_dir = './experiments/simulation/pvalagg_vs_fedci5'
+data_dir = './experiments/simulation/pvalagg_vs_fedci'
 data_file_pattern = '{}-{}-{}.ndjson'
 
 import datetime
@@ -491,26 +527,6 @@ data_file_pattern = str(now) + '-' + data_file_pattern
 def run_comparison(setup):
     idx, data_dir, data_file_pattern, test_setup, num_samples, num_clients = setup
     data_file = data_file_pattern.format(idx, num_samples, num_clients)
-    raw_true_pag = test_setup[0]
-
-
-    # test get data
-
-    labels = sorted(list(set(test_setup[1][0] + test_setup[1][1])))
-    potential_var_types = {'continuos': [1], 'binary': [2], 'ordinal': [3,4], 'nominal': [3,4]}
-    var_types = {}
-    var_levels = []
-    for label in labels:
-        var_type = random.choice(list(potential_var_types.keys()))
-        var_types[label] = var_type
-        var_levels += [random.choice(potential_var_types[var_type])]
-    dat = get_data_f(raw_true_pag, 1000, var_levels)
-    print(dat)
-
-
-    # #
-
-
     (true_pag, all_labels), (client_data, data_percs) = get_data(test_setup, num_samples, num_clients)
 
     server = setup_server(client_data)
@@ -521,7 +537,7 @@ def run_comparison(setup):
     df_fedci = server_results_to_dataframe(all_labels_fedci, results_fedci)
 
     metrics = run_riod(
-        raw_true_pag,
+        true_pag,
         all_labels,
         df_fedci,
         all_labels_fedci,
@@ -539,28 +555,28 @@ def run_comparison(setup):
     ## Run p val agg IOD
 
     # since use of own CI test, this throws errors on small sample sizes
-    try:
-        client_ci_info = [mxm_ci_test(d) for d in client_data]
-        #client_ci_info = [run_client(d) for d in client_data]
-        client_ci_dfs, client_ci_labels = zip(*client_ci_info)
+    #try:
+    client_ci_info = [mxm_ci_test(d) for d in client_data]
+    #client_ci_info = [run_client(d) for d in client_data]
+    client_ci_dfs, client_ci_labels = zip(*client_ci_info)
 
-        metrics_pvalagg = run_pval_agg_iod(
-            raw_true_pag,
-            all_labels,
-            list(client_labels.keys()),
-            client_ci_dfs,
-            client_ci_labels,
-            ALPHA
-        )
-    except:
-        metrics_pvalagg = None
+    metrics_pvalagg = run_pval_agg_iod(
+        true_pag,
+        all_labels,
+        list(client_labels.keys()),
+        client_ci_dfs,
+        client_ci_labels,
+        ALPHA
+    )
+        #except:
+        #metrics_pvalagg = None
 
     #print(found_correct_pag_fedci, found_correct_pag_pvalagg)
 
     #log_results(data_dir, data_file, metrics, metrics_pvalagg, ALPHA, num_samples, num_clients, data_percs)
 
-num_clients_options = [3,5,10]
-num_samples_options = [300,500,1000]
+num_clients_options = [3,5]#,10]
+num_samples_options = [1000,2000]#,5000]
 
 #pl.Config.set_tbl_rows(20)
 

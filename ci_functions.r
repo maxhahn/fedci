@@ -16,10 +16,8 @@ get_data <- function(true_pag_amat, num_samples, variable_levels) {
   cols <- colnames(true_pag_amat)
   for (vari in 1:length(cols)) {
       var_name <- colnames(true_pag_amat)[vari]
-      f.args[[var_name]] <- list(levels = variable_levels[vari])
+      f.args[[var_name]] <- list(levels = variable_levels[[vari]])
     }
-
-  print(f.args)
 
   dat_out <- FCI.Utils::generateDatasetFromPAG(apag = true_pag_amat,
     N=num_samples,
