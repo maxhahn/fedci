@@ -67,27 +67,36 @@ class ProxyServerBuilder():
     def __init__(self, cls):
         self.clients = []
         self.cls = cls
-
+        self.max_regressors = None
+        self.max_iterations = 25
+    def set_max_regressors(self, max_regressors):
+        self.max_regressors = max_regressors
+        return self
+    def set_max_iterations(self, max_iterations):
+        self.max_iterations = max_iterations
+        return self
     def add_client(self, hostname, port):
         if (hostname, port) in self.clients:
             print('Client exists already')
             return self
         self.clients.append((hostname, port))
         return self
-
     def build(self):
-        return self.cls(self.clients)
+        return self.cls(self.clients, max_regressors=self.max_regressors, max_iterations=self.max_iterations)
 
 class ProxyServer():
     @classmethod
-    def builder(cls):
-        return ProxyServerBuilder(cls)
-
-    def __init__(self, clients):
+    def builder(cls, **kwargs):
+        return ProxyServerBuilder(cls, **kwargs)
+    def __init__(self, clients, max_regressors, max_iterations):
         self.connections = {str(i): rpyc.connect(host,port,config={'allow_public_attrs': True, 'allow_pickle': True}) for i, (host,port) in enumerate(clients)}
         self.clients = {i: c.root for i, c in self.connections.items()}
-        self.server = Server(self.clients, _network_fetch_function=rpyc.classic.obtain)
-
+        self.server = Server(
+            self.clients,
+            _network_fetch_function=rpyc.classic.obtain,
+            max_regressors=max_regressors,
+            max_iterations=max_iterations
+        )
     def run(self):
         return self.server.run()
     def get_tests(self):

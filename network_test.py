@@ -4,7 +4,7 @@ from fedci.server import ProxyServer, Server
 import polars as pl
 df = pl.read_parquet('test.parquet')
 
-x = 3
+x = 2
 if x == 1:
     s = Server({'1': Client(df)})
     r = s.run()
@@ -18,8 +18,9 @@ elif x == 2:
     server_thread = threading.Thread(target=client.start, args=(port,), daemon=True)
     server_thread.start()
 
-    server_proxy = ProxyServer.builder().add_client('localhost', port).build()
+    server_proxy = ProxyServer.builder().set_max_regressors(0).add_client('localhost', port).build()
     results = server_proxy.server.run()
+    client.close()
     print(results)
 elif x == 3:
     df1 = df[:len(df)//2]
@@ -42,3 +43,6 @@ elif x == 3:
     server_proxy = ProxyServer.builder().add_client('localhost', port1).add_client('localhost', port2).build()
     results = server_proxy.server.run()
     print(results)
+
+    client1.close()
+    client2.close()

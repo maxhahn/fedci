@@ -1,3 +1,4 @@
+from attr import s
 from scipy.sparse.linalg._eigen.lobpcg.lobpcg import LinAlgError
 from .utils import VariableType, ClientResponseData, BetaUpdateData
 import polars as pl
@@ -385,10 +386,18 @@ class Client():
 class ProxyClient(rpyc.Service):
     def __init__(self, data):
         self.client = Client(data, _network_fetch_function=rpyc.classic.obtain)
+        self.server: rpyc.utils.server.ThreadedServer = None
     def start(self, port):
-        server = rpyc.utils.server.ThreadedServer(self, port=port, protocol_config={'allow_public_attrs': True, 'allow_pickle': True})
-        server.start()
-
+        if self.server is not None:
+            self.close()
+        self.server = rpyc.utils.server.ThreadedServer(self, port=port, protocol_config={'allow_public_attrs': True, 'allow_pickle': True})
+        self.server.start()
+    def close(self):
+        if self.server is None:
+            return
+        self.server.close()
+        self.server = None
+    # expose all functions of client
     def on_connect(self, conn):
         for name in dir(self.client):
             if callable(getattr(self.client, name)) and not name.startswith("_"):
