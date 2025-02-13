@@ -79,7 +79,8 @@ class ProxyServerBuilder():
         if (hostname, port) in self.clients:
             print('Client exists already')
             return self
-        self.clients.append((hostname, port))
+        client = rpyc.connect(hostname, port, config={'allow_public_attrs': True, 'allow_pickle': True})
+        self.clients.append(client)
         return self
     def build(self):
         return self.cls(self.clients, max_regressors=self.max_regressors, max_iterations=self.max_iterations)
@@ -89,14 +90,15 @@ class ProxyServer():
     def builder(cls, **kwargs):
         return ProxyServerBuilder(cls, **kwargs)
     def __init__(self, clients, max_regressors, max_iterations):
-        self.connections = {str(i): rpyc.connect(host,port,config={'allow_public_attrs': True, 'allow_pickle': True}) for i, (host,port) in enumerate(clients)}
-        self.clients = {i: c.root for i, c in self.connections.items()}
+        self.clients = {i: c.root for i, c in enumerate(clients)}
         self.server = Server(
             self.clients,
             _network_fetch_function=rpyc.classic.obtain,
             max_regressors=max_regressors,
             max_iterations=max_iterations
         )
+    def __getattr__(self, name):
+        return getattr(self.server, name)
     def run(self):
         return self.server.run()
     def get_tests(self):

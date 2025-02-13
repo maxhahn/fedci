@@ -1,6 +1,6 @@
 from litestar import Controller, post, Response, MediaType
 from litestar.exceptions import HTTPException
-from ls_data_structures import Algorithm, Connection, FEDGLMUserData, RIODUserData, Room, CheckInRequest, UpdateUserRequest, UserDTO, RIODDataSubmissionRequest
+from ls_data_structures import Connection, FedCIDataSubmissionRequest, FedCIUserData, MetaAnalysisUserData, Room, CheckInRequest, UpdateUserRequest, UserDTO, MetaAnalysisDataSubmissionRequest
 from ls_env import connections, user2connection
 from ls_helpers import validate_user_request
 from typing import Optional
@@ -8,6 +8,8 @@ import uuid
 import datetime
 import pickle
 import base64
+
+from shared.env import Algorithm
 
 class UserController(Controller):
     path = '/user'
@@ -33,27 +35,11 @@ class UserController(Controller):
             username_offset += 1
 
         selected_algorithm = Algorithm(data.algorithm)
-        if selected_algorithm == Algorithm.FEDERATED_GLM:
-            provided_data = FEDGLMUserData(
-                data_labels = data.data_labels,
-                schema=data.schema,
-                categorical_expressions=data.categorical_expressions,
-                ordinal_expressions=data.ordinal_expressions
-            )
-        elif selected_algorithm == Algorithm.P_VALUE_AGGREGATION:
-            provided_data = RIODUserData(
-                data_labels = data.data_labels,
-                schema=data.schema,
-                data=None
-            )
-        else:
-            raise Exception(f'Unknown algorithm {selected_algorithm}')
 
         conn = Connection(new_id,
                         new_username,
                         datetime.datetime.now(),
-                        algorithm=selected_algorithm,
-                        provided_data=provided_data
+                        algorithm=selected_algorithm
                         )
         connections[new_id] = conn
         user2connection[new_username] = conn
@@ -92,18 +78,37 @@ class UserController(Controller):
             )
 
     @post("/submit-data")
-    async def receive_data(self, data: RIODDataSubmissionRequest) -> Response:
+    async def receive_meta_analysis_data(self, data: MetaAnalysisDataSubmissionRequest) -> Response:
         if not validate_user_request(data.id, data.username):
             raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
 
-        if connections[data.id].algorithm != Algorithm.P_VALUE_AGGREGATION:
+        if connections[data.id].algorithm != Algorithm.META_ANALYSIS:
             raise HTTPException(detail=f'Incompatible algorithm {connections[data.id].algorithm} for data submission', status_code=403)
 
         # data to pandas conversion
-        connections[data.id].provided_data.data = pickle.loads(base64.b64decode(data.data.encode()))
+        df = pickle.loads(base64.b64decode(data.data.encode()))
+        connections[data.id].algorithm_data = MetaAnalysisUserData(data_labels=sorted(df.columns), data=df)
 
-        #if data.data_labels is None or data.categorical_expressions is None or data.ordinal_expressions is None:
-        #    raise HTTPException(detail='Invalid data provided', status_code=400)
+        return Response(
+            media_type=MediaType.TEXT,
+            content='Data received',
+            status_code=200
+            )
+
+    @post("/submit-rpc-info")
+    async def receive_fedci_data(self, data: FedCIDataSubmissionRequest) -> Response:
+        if not validate_user_request(data.id, data.username):
+            raise HTTPException(detail='The provided identification is not recognized by the server', status_code=401)
+
+        if connections[data.id].algorithm != Algorithm.FEDCI:
+            raise HTTPException(detail=f'Incompatible algorithm {connections[data.id].algorithm} for RPC connection data', status_code=403)
+
+        # data to pandas conversion
+        connections[data.id].algorithm_data = FedCIUserData(
+            data_labels=data.data_labels,
+            hostname=data.hostname,
+            port=data.port
+        )
 
         return Response(
             media_type=MediaType.TEXT,

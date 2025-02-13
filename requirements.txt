@@ -9,3 +9,4 @@ streamlit-extras
 streamlit-autorefresh
 statsmodels
 scipy
+rpyc

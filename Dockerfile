@@ -56,9 +56,9 @@ RUN R -e "packages <- readLines('/tmp/requirements.r'); \
     installed_packages <- installed.packages()[,'Package']; \
     packages <- setdiff(packages, installed_packages); \
     if(length(packages) > 0) { \
-        install.packages(packages, \
-        repos='http://cran.rstudio.com/', \
-        dependencies=TRUE) \
+    install.packages(packages, \
+    repos='http://cran.rstudio.com/', \
+    dependencies=TRUE) \
     }"
 
 COPY install_mxm.r /tmp/install_mxm.r
@@ -93,7 +93,7 @@ WORKDIR /app
 
 # More Python packages
 RUN pip install pandas polars graphviz rpy2 litestar[standard] streamlit extra-streamlit-components streamlit-extras streamlit-autorefresh
-RUN pip install statsmodels scipy
+RUN pip install statsmodels scipy rpyc
 
 # make startup script executable
 RUN chmod +x startup.sh

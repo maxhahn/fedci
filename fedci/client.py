@@ -387,6 +387,8 @@ class ProxyClient(rpyc.Service):
     def __init__(self, data):
         self.client = Client(data, _network_fetch_function=rpyc.classic.obtain)
         self.server: rpyc.utils.server.ThreadedServer = None
+    def __del__(self):
+        self.close()
     def start(self, port):
         if self.server is not None:
             self.close()

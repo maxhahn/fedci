@@ -8,11 +8,12 @@ from typing import Optional
 from ls_data_structures import (
     RoomDTO, RoomDetailsDTO,
     BasicRequest, RoomCreationRequest, JoinRoomRequest,
-    Algorithm, Room, FEDGLMState, RIODState
+    Room
 )
-from ls_env import rooms, connections, user2room
-from ls_helpers import validate_user_request
+from shared.env import Algorithm
 
+from ls_env import rooms, connections, user2room, user2connection
+from ls_helpers import validate_user_request
 
 class RoomController(Controller):
     path = '/rooms'
@@ -24,7 +25,7 @@ class RoomController(Controller):
 
         return Response(
             media_type=MediaType.JSON,
-            content=[RoomDTO(room) for room in rooms.values() if not room.is_hidden],
+            content=[RoomDTO(room) for room in rooms.values() if not room.is_hidden and room.algorithm == user2connection[data.username].algorithm],
             status_code=200
             )
 
@@ -65,28 +66,8 @@ class RoomController(Controller):
             new_room_name = room_name + f' ({room_name_offset})'
             room_name_offset += 1
 
-        selected_algorithm = Algorithm(data.algorithm)
-        if selected_algorithm == Algorithm.FEDERATED_GLM:
-            algorithm_state = FEDGLMState(
-                user_provided_labels = {room_owner: connections[data.id].provided_data.data_labels},
-                user_provided_schema = {room_owner: connections[data.id].provided_data.schema},
-                user_provided_categorical_expressions = {room_owner: connections[data.id].provided_data.categorical_expressions},
-                user_provided_ordinal_expressions = {room_owner: connections[data.id].provided_data.ordinal_expressions},
-                testing_engine = None,
-                pending_data = None,
-                start_of_last_iteration = None,
-
-            )
-        elif selected_algorithm == Algorithm.P_VALUE_AGGREGATION:
-            algorithm_state = RIODState(
-                user_provided_labels={room_owner: connections[data.id].provided_data.data_labels}
-            )
-        else:
-            raise Exception(f'Unknown algorithm {selected_algorithm}')
-
         room = Room(name=new_room_name,
-                    algorithm=selected_algorithm,
-                    algorithm_state=algorithm_state,
+                    algorithm=Algorithm(data.algorithm),
                     owner_name=room_owner,
                     password=data.password,
                     is_locked=False,
@@ -94,6 +75,7 @@ class RoomController(Controller):
                     is_processing=False,
                     is_finished=False,
                     users={room_owner},
+                    user_provided_labels={room_owner: connections[data.id].algorithm_data.data_labels},
                     result=None,
                     result_labels=None,
                     user_results={},
@@ -121,8 +103,11 @@ class RoomController(Controller):
 
         room = rooms[room_name]
 
-        if room.algorithm == Algorithm.P_VALUE_AGGREGATION and connections[data.id].provided_data.data is None:
-            raise HTTPException(detail='You have to upload data before joining a room', status_code=403)
+        if connections[data.id].algorithm_data is None:
+            if connections[data.id].algorithm == Algorithm.META_ANALYSIS:
+                raise HTTPException(detail='You have to upload data before joining a room', status_code=403)
+            else:
+                raise HTTPException(detail='You have to provide RPC details before joining a room', status_code=403)
 
         if room.is_locked:
             raise HTTPException(detail='The room is locked', status_code=403)
@@ -130,16 +115,7 @@ class RoomController(Controller):
             raise HTTPException(detail='Incorrect password', status_code=403)
 
         room.users.add(data.username)
-        if room.algorithm == Algorithm.FEDERATED_GLM:
-            room.algorithm_state.user_provided_categorical_expressions[data.username] = connections[data.id].provided_data.categorical_expressions
-            room.algorithm_state.user_provided_ordinal_expressions[data.username] = connections[data.id].provided_data.ordinal_expressions
-            room.algorithm_state.user_provided_labels[data.username] = connections[data.id].provided_data.data_labels
-            room.algorithm_state.user_provided_schema[data.username] = connections[data.id].provided_data.data_labels
-        elif room.algorithm == Algorithm.P_VALUE_AGGREGATION:
-            room.algorithm_state.user_provided_labels[data.username] = connections[data.id].provided_data.data_labels
-        else:
-            raise Exception(f'Unknown algorithm {room.algorithm}')
-
+        room.user_provided_labels[data.username] = connections[data.id].algorithm_data.data_labels
         user2room[data.username] = room
 
         return Response(
@@ -172,14 +148,7 @@ class RoomController(Controller):
                 status_code=200
                 )
 
-        if room.algorithm == Algorithm.FEDERATED_GLM:
-            del room.algorithm_state.user_provided_labels[data.username]
-            del room.algorithm_state.user_provided_categorical_expressions[data.username]
-            del room.algorithm_state.user_provided_ordinal_expressions[data.username]
-        elif room.algorithm == Algorithm.P_VALUE_AGGREGATION:
-            del room.algorithm_state.user_provided_labels[data.username]
-        else:
-            raise Exception(f'Unknown algorithm {room.algorithm}')
+        del room.user_provided_labels[data.username]
 
         if room.is_finished:
             del room.user_results[data.username]
@@ -218,14 +187,8 @@ class RoomController(Controller):
             raise HTTPException(detail='The person attempted to kick is not inside the room', status_code=403)
 
         room.users.remove(username_to_kick)
-        if room.algorithm == Algorithm.FEDERATED_GLM:
-            del room.algorithm_state.user_provided_labels[username_to_kick]
-            del room.algorithm_state.user_provided_categorical_expressions[username_to_kick]
-            del room.algorithm_state.user_provided_ordinal_expressions[username_to_kick]
-        elif room.algorithm == Algorithm.P_VALUE_AGGREGATION:
-            del room.algorithm_state.user_provided_labels[username_to_kick]
-        else:
-            raise Exception(f'Unknown algorithm {room.algorithm}')
+
+        del room.user_provided_labels[username_to_kick]
 
         if room.is_finished:
             del room.user_results[username_to_kick]

@@ -179,8 +179,6 @@ def _transform_dataframe(df):
     r_dataframe = base.as_data_frame(r_list)
     return r_dataframe
 
-ro.r['source']('./ci_functions.r')
-run_ci_test_f = ro.globalenv['run_ci_test']
 def get_riod_tests(data, max_regressors=None, test_targets=None):
     if max_regressors is None:
         max_regressors = 999
@@ -189,6 +187,8 @@ def get_riod_tests(data, max_regressors=None, test_targets=None):
     ground_truth_tests = []
 
     with (ro.default_converter + pandas2ri.converter).context():
+        ro.r['source']('./ci_functions.r')
+        run_ci_test_f = ro.globalenv['run_ci_test']
         df_r = _transform_dataframe(data.with_columns(cs.boolean().cast(pl.Utf8)).to_pandas())
 
         # delete potentially existing file
