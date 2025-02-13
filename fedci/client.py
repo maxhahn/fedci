@@ -1,4 +1,3 @@
-from attr import s
 from scipy.sparse.linalg._eigen.lobpcg.lobpcg import LinAlgError
 from .utils import VariableType, ClientResponseData, BetaUpdateData
 import polars as pl

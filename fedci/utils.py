@@ -2,8 +2,6 @@ import enum
 from dataclasses import dataclass
 from typing import Dict
 
-import numpy as np
-
 class VariableType(enum.Enum):
     CONTINUOS = 0
     BINARY = 1
