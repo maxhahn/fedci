@@ -445,7 +445,7 @@ class ProxyClient(rpyc.Service):
         # expose alle Methoden sofort:
         for name in dir(self.client):
             if callable(getattr(self.client, name)) and not name.startswith("_"):
-                setattr(self, f"exposed_{name}", getattr(self.client, name))
+                setattr(self, name, getattr(self.client, name))
 
     def __del__(self):
         self.close()

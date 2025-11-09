@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict
 
 
-class VariableType(enum.Enum):
+class VariableType(int, enum.Enum):
     CONTINUOS = 0
     BINARY = 1
     CATEGORICAL = 2
