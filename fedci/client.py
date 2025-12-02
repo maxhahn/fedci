@@ -7,7 +7,7 @@ import statsmodels.api as sm
 from statsmodels.genmod.families import family
 from statsmodels.genmod.generalized_linear_model import GLMResults
 
-from .env import EXPAND_ORDINALS, LR, OVR
+from .env import CLIENT_HETEROGENIETY, EXPAND_ORDINALS, FIT_INTERCEPT, LR, OVR
 from .utils import BetaUpdateData, ClientResponseData, VariableType
 
 
@@ -20,12 +20,15 @@ class ComputationHelper:
         return result
 
     @staticmethod
-    def run_model(y, X, model):
+    def run_model(y, X, model, gamma=None):
         llf = model.llf
         deviance = model.deviance
 
         # calculate fisher information and score vector
         eta = model.predict(which="linear")
+
+        if gamma is not None:
+            eta += gamma
 
         # g' is inverse of link function
         inverse_link = model.family.link.inverse
@@ -55,9 +58,16 @@ class ComputationHelper:
         return {"llf": llf, "deviance": deviance, "xwx": xwx, "xwz": xwz}
 
     @classmethod
-    def run_regression(cls, y, X, beta, glm_family):
+    def run_regression(cls, y, X, beta, glm_family, gamma=None):
         model = cls.get_regression_model(y, X, beta, glm_family)
-        return cls.run_model(y, X, model)
+        return cls.run_model(y, X, model, gamma)
+
+    @staticmethod
+    def fit_local_gamma(y, X, beta, glm_family):
+        offset = X @ beta
+        intercept = np.ones((len(y), 1))
+        result = sm.GLM(y, intercept, offset=offset, family=glm_family).fit()
+        return result.params[0]
 
 
 class ComputationUnit:
@@ -73,14 +83,32 @@ class ContinousComputationUnit(ComputationUnit):
         beta = list(beta.values())[0]
 
         X = data.to_pandas()[sorted(X_labels)]
-        X["__const"] = 1
+        if FIT_INTERCEPT:
+            X["__const"] = 1
         X = X.to_numpy().astype(float)
 
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
 
+        if X.shape[1] == 0:
+            mu = np.repeat(0, len(y))
+            llf = family.Gaussian().loglike(y, mu)
+
+            return {
+                "llf": llf,
+                "deviance": -2 * llf,
+                "xwx": np.zeros((0, 0)),
+                "xwz": np.zeros((0,)),
+            }
+
+        gamma = None
+        if CLIENT_HETEROGENIETY:
+            gamma = ComputationHelper.fit_local_gamma(
+                y=y, X=X, beta=beta, glm_family=family.Gaussian()
+            )
+
         return ComputationHelper.run_regression(
-            y=y, X=X, beta=beta, glm_family=family.Gaussian()
+            y=y, X=X, beta=beta, glm_family=family.Gaussian(), gamma=gamma
         )
 
 
@@ -91,14 +119,32 @@ class BinaryComputationUnit(ComputationUnit):
         beta = list(beta.values())[0]
 
         X = data.to_pandas()[sorted(X_labels)]
-        X["__const"] = 1
+        if FIT_INTERCEPT:
+            X["__const"] = 1
         X = X.to_numpy().astype(float)
 
         y = data.to_pandas()[y_label]
         y = y.to_numpy().astype(float)
 
+        if X.shape[1] == 0:
+            mu = np.repeat(0.5, len(y))
+            llf = family.Binomial().loglike(y, mu)
+
+            return {
+                "llf": llf,
+                "deviance": -2 * llf,
+                "xwx": np.zeros((0, 0)),
+                "xwz": np.zeros((0,)),
+            }
+
+        gamma = None
+        if CLIENT_HETEROGENIETY:
+            gamma = ComputationHelper.fit_local_gamma(
+                y=y, X=X, beta=beta, glm_family=family.Binomial()
+            )
+
         return ComputationHelper.run_regression(
-            y=y, X=X, beta=beta, glm_family=family.Binomial()
+            y=y, X=X, beta=beta, glm_family=family.Binomial(), gamma=gamma
         )
 
 
@@ -113,24 +159,50 @@ class CategoricalComputationUnit(ComputationUnit):
 
         # Design matrix
         X = data.to_pandas()[sorted(X_labels)]
-        X["__const"] = 1
+        if FIT_INTERCEPT:
+            X["__const"] = 1
         X = X.to_numpy().astype(float)
 
         num_categories = len(y_dummy_columns)  # J
-        num_features = len(X_labels) + 1  # K
+        num_features = len(X_labels)  # K-1 (no intercept)
+        if FIT_INTERCEPT:
+            num_features += 1  # K (added intercept)
+
+        # Response matrix (N x (J-1))
+        y = data.to_pandas()[y_dummy_columns[1:]].to_numpy()
+
+        if X.shape[1] == 0:
+            ref_col = 1 - y.sum(axis=1, keepdims=True)
+            y_full = np.hstack([y, ref_col])  # shape (n, k)
+            p = np.array([1 / y.shape[1]] * y.shape[1])  # must sum to 1
+            llf = np.sum(y_full * np.log(p))
+
+            results = {y_label: {"xwx": np.zeros((0, 0)), "xwz": np.zeros((0,))}}
+
+            return {"llf": llf, "deviance": -2 * llf, "beta_update_data": results}
+
+        # Reshape beta (K x (J-1))
+        beta = beta.reshape(num_features, -1, order="F")
+
+        gamma = np.zeros((len(y), beta.shape[1]))
+        if CLIENT_HETEROGENIETY:
+            gamma = []
+            for i, beta_i in enumerate(beta.T):
+                y_i = y[:, i]
+                gamma_i = ComputationHelper.fit_local_gamma(
+                    y=y_i, X=X, beta=beta_i.T, glm_family=family.Binomial()
+                )
+                gamma.append(gamma_i)
+            gamma = np.tile(np.array(gamma), (y.shape[0], 1))
+        else:
+            gamma = np.zeros_like(y)
 
         def softmax(eta):
             exp_eta = np.exp(np.hstack([np.zeros((eta.shape[0], 1)), eta]))
             return exp_eta / exp_eta.sum(axis=1, keepdims=True)
 
-        # Response matrix (N x (J-1))
-        Y = data.to_pandas()[y_dummy_columns[1:]].to_numpy()
-
-        # Reshape beta (K x (J-1))
-        beta = beta.reshape(num_features, -1, order="F")
-
         # Compute eta and mu
-        eta = np.clip(X @ beta, -350, 350)  # N x (J-1)
+        eta = np.clip((X @ beta) + gamma, -350, 350)  # N x (J-1)
         mu = np.clip(softmax(eta), 1e-8, 1 - 1e-8)  # N x J
         mu_reduced = mu[:, 1:]  # N x (J-1)
 
@@ -141,8 +213,8 @@ class CategoricalComputationUnit(ComputationUnit):
         XWz = np.zeros(num_features * (num_categories - 1))
 
         # Construct W blocks and z
-        for i in range(Y.shape[0]):
-            yi = Y[i]  # (J-1)
+        for i in range(y.shape[0]):
+            yi = y[i]  # (J-1)
             pi = mu_reduced[i]
             var_i = np.diag(pi) - np.outer(pi, pi)  # (J-1) x (J-1)
 
@@ -160,9 +232,9 @@ class CategoricalComputationUnit(ComputationUnit):
             XWz += Xi.T @ Wi @ z_i
 
         # Compute log-likelihood and deviance
-        Y_full = data.to_pandas()[y_dummy_columns].to_numpy()  # N x J
+        y_full = data.to_pandas()[y_dummy_columns].to_numpy()  # N x J
         logprob = np.log(np.clip(mu, 1e-8, 1))
-        llf = np.sum(Y_full * logprob)
+        llf = np.sum(y_full * logprob)
         deviance = -2 * llf
 
         results = {y_label: {"xwx": XWX, "xwz": XWz}}
@@ -174,8 +246,14 @@ class CategoricalOVRComputationUnit(ComputationUnit):
     @staticmethod
     def compute(data, y_label, X_labels, betas):
         X = data.to_pandas()[sorted(X_labels)]
-        X["__const"] = 1
+        if FIT_INTERCEPT:
+            X["__const"] = 1
         X = X.to_numpy().astype(float)
+
+        if X.shape[1] == 0:
+            raise NotImplementedError(
+                "Cannot fit models without coefficients for OVR categorical data"
+            )
 
         models = {}
         results = {}
@@ -183,11 +261,17 @@ class CategoricalOVRComputationUnit(ComputationUnit):
             y = data.to_pandas()[category]
             y = y.to_numpy().astype(float)
 
+            gamma = None
+            if CLIENT_HETEROGENIETY:
+                gamma = ComputationHelper.fit_local_gamma(
+                    y=y, X=X, beta=betas[category], glm_family=family.Binomial()
+                )
+
             models[category] = ComputationHelper.get_regression_model(
                 y=y, X=X, beta=betas[category], glm_family=family.Binomial()
             )
             current_result = ComputationHelper.run_model(
-                y=y, X=X, model=models[category]
+                y=y, X=X, model=models[category], gamma=gamma
             )
             results[category] = {
                 "xwx": current_result["xwx"],
@@ -231,8 +315,14 @@ class OrdinalComputationUnit(ComputationUnit):
     @staticmethod
     def compute(data, y_label, X_labels, betas):
         X = data.to_pandas()[sorted(X_labels)]
-        X["__const"] = 1
+        if FIT_INTERCEPT:
+            X["__const"] = 1
         X = X.to_numpy().astype(float)
+
+        if X.shape[1] == 0:
+            raise NotImplementedError(
+                "Cannot fit models without coefficients for ordinal data"
+            )
 
         models = {}
         results = {}
@@ -241,10 +331,18 @@ class OrdinalComputationUnit(ComputationUnit):
             y = data.to_pandas()[y_label]
             y = (y.to_numpy() <= level_int).astype(float)
 
+            gamma = None
+            if CLIENT_HETEROGENIETY:
+                gamma = ComputationHelper.fit_local_gamma(
+                    y=y, X=X, beta=betas[level], glm_family=family.Binomial()
+                )
+
             models[level] = ComputationHelper.get_regression_model(
                 y=y, X=X, beta=betas[level], glm_family=family.Binomial()
             )
-            current_result = ComputationHelper.run_model(y=y, X=X, model=models[level])
+            current_result = ComputationHelper.run_model(
+                y=y, X=X, model=models[level], gamma=gamma
+            )
             results[level] = {
                 "xwx": current_result["xwx"],
                 "xwz": current_result["xwz"],

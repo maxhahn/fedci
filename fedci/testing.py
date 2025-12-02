@@ -1,11 +1,10 @@
 from itertools import chain, combinations
-from this import d
 from typing import Dict, List
 
 import numpy as np
 import scipy
 
-from .env import DEBUG, EXPAND_ORDINALS, OVR, RIDGE
+from .env import DEBUG, FIT_INTERCEPT, OVR, RIDGE
 from .utils import BetaUpdateData, ClientResponseData, VariableType
 
 
@@ -19,7 +18,11 @@ class RegressionTest:
     def __init__(self, y_label: str, X_labels: List[str]):
         self.y_label = y_label
         self.X_labels = X_labels
-        self.beta = np.zeros(len(X_labels) + 1)
+
+        num_coeffs = len(X_labels)
+        if FIT_INTERCEPT:
+            num_coeffs += 1
+        self.beta = np.zeros(num_coeffs)
 
     def update_beta(self, data: List[BetaUpdateData]):
         xwx = sum([d.xwx for d in data])
@@ -34,10 +37,15 @@ class RegressionTest:
         except np.linalg.LinAlgError:
             xwx_inv = np.linalg.pinv(xwx)
 
-        if RIDGE > 0:
-            self.beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
-        else:
-            self.beta = xwx_inv @ xwz
+        new_beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
+
+        if np.any(np.isnan(new_beta)):
+            print(
+                f"Coefficients are diverging. You may rerun with RIDGE parameter. Stopping updates..."
+            )
+            return
+
+        self.beta = new_beta
 
     def __lt__(self, other):
         if len(self.X_labels) < len(other.X_labels):

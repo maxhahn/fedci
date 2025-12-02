@@ -11,10 +11,58 @@ from fedci.server import ProxyServer, Server
 @pytest.fixture
 def sample_data():
     data = {
-        "A": [True, True, True, False, False, False, True, True, True, False],
-        "B": [1, 2, 3, 1, 2, 3, 1, 2, 3, 1],
-        "C": ["A", "A", "A", "A", "A", "B", "B", "B", "B", "B"],
-        "D": [1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 1.0, 1.0, 2.0, 2.0],
+        "A": [
+            True,
+            True,
+            True,
+            False,
+            False,
+            False,
+            True,
+            True,
+            True,
+            False,
+            False,
+            False,
+            True,
+            True,
+            True,
+        ],
+        "B": [1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3],
+        "C": [
+            "A",
+            "A",
+            "A",
+            "A",
+            "A",
+            "B",
+            "B",
+            "B",
+            "B",
+            "B",
+            "A",
+            "A",
+            "A",
+            "B",
+            "B",
+        ],
+        "D": [
+            1.0,
+            1.0,
+            2.0,
+            2.0,
+            3.0,
+            3.0,
+            1.0,
+            1.0,
+            2.0,
+            2.0,
+            3.0,
+            3.0,
+            3.5,
+            1.5,
+            2.5,
+        ],
     }
     return pl.from_dict(data)
 
@@ -37,6 +85,29 @@ def test_local_server_single_client(sample_data):
     # expected tests is (n over 2) x (n-2)^2, pick two variables X and Y and all others can either be in conditioning set or not
     num_cols = len(sample_data.columns)
     assert len(results) == scipy.special.binom(num_cols, 2) * (num_cols - 2) ** 2
+
+
+# this test covers diverging parameters
+def test_local_server_single_client_partial_data(sample_data):
+    subdata = sample_data.head(10)
+    server = Server({"1": Client(subdata)})
+
+    results = server.run()
+
+    # expected tests is (n over 2) x (n-2)^2, pick two variables X and Y and all others can either be in conditioning set or not
+    num_cols = len(sample_data.columns)
+    assert len(results) == scipy.special.binom(num_cols, 2) * (num_cols - 2) ** 2
+
+
+# this test covers no intercept no conditioning set tests
+def test_local_server_single_client_single_test_no_intercept(sample_data):
+    server = Server({"1": Client(sample_data)})
+
+    result = server.test("C", "D", [])
+
+    assert result.v0 == "B"
+    assert result.v1 == "C"
+    assert result.conditioning_set == []
 
 
 def test_local_server_multiple_clients(sample_data):
