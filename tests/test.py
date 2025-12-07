@@ -86,7 +86,7 @@ def test_local_server_single_client_given_schema(sample_data):
 
     assert result.v0 == "A"
     assert result.v1 == "B"
-    assert result.conditioning_set == ["C"]
+    assert result.conditioning_set == {"C"}
 
 
 def test_local_server_single_client_single_test(sample_data):
@@ -96,7 +96,7 @@ def test_local_server_single_client_single_test(sample_data):
 
     assert result.v0 == "A"
     assert result.v1 == "B"
-    assert result.conditioning_set == ["C"]
+    assert result.conditioning_set == {"C"}
 
 
 def test_local_server_single_client(sample_data):
@@ -127,9 +127,9 @@ def test_local_server_single_client_single_test_no_intercept(sample_data):
 
     result = server.test("C", "D", [])
 
-    assert result.v0 == "B"
-    assert result.v1 == "C"
-    assert result.conditioning_set == []
+    assert result.v0 == "C"
+    assert result.v1 == "D"
+    assert list(result.conditioning_set) == []
 
 
 def test_local_server_multiple_clients(sample_data):
@@ -172,6 +172,14 @@ def test_local_server_multiple_clients_partial_overlap(sample_data):
     # one possible test on shared variables
     # n over 2 for pairs of variables choices with either a variable in cond set or not (x2), for both clients,
     #   subtracting the test that can be performed on the shared vars
+    print(
+        len(results),
+        1
+        + (scipy.special.binom(c1_num_cols, 2) * 2)
+        - 1
+        + (scipy.special.binom(c2_num_cols, 2) * 2)
+        - 1,
+    )
     assert (
         len(results)
         == 1
@@ -199,7 +207,7 @@ def test_proxy_server_multiple_clients_single_test(sample_data):
     df1 = sample_data[: len(sample_data) // 2]
     df2 = sample_data[len(sample_data) // 2 :]
 
-    port1, port2 = 18862, 18863
+    port1, port2 = 18864, 18865
 
     client1 = ProxyClient("1", df1)
     client2 = ProxyClient("2", df2)
@@ -223,14 +231,14 @@ def test_proxy_server_multiple_clients_single_test(sample_data):
 
     assert result.v0 == "A"
     assert result.v1 == "B"
-    assert result.conditioning_set == ["C"]
+    assert result.conditioning_set == {"C"}
 
 
 def test_proxy_server_multiple_clients(sample_data):
     df1 = sample_data[: len(sample_data) // 2]
     df2 = sample_data[len(sample_data) // 2 :]
 
-    port1, port2 = 18862, 18863
+    port1, port2 = 18864, 18865
 
     client1 = ProxyClient("1", df1)
     client2 = ProxyClient("2", df2)
@@ -260,7 +268,7 @@ def test_proxy_server_multiple_clients_1_regressor(sample_data):
     df1 = sample_data[: len(sample_data) // 2]
     df2 = sample_data[len(sample_data) // 2 :]
 
-    port1, port2 = 18862, 18863
+    port1, port2 = 18864, 18865
 
     client1 = ProxyClient("1", df1)
     client2 = ProxyClient("2", df2)

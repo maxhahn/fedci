@@ -132,6 +132,8 @@ class LikelihoodRatioTest:
         self.restricted_test: RegressionTest = restricted_test
         self.unrestricted_test: RegressionTest = unrestricted_test
 
+        self.iterations = 0
+
         self.p_value: Optional[float] = None
 
     def __repr__(self):
@@ -222,6 +224,7 @@ class LikelihoodRatioTest:
                     for _update in update
                 ]
             )
+        self.iterations += 1
 
     def _set_p_value(self):
         t0_llf = self.restricted_test.llf
@@ -256,6 +259,7 @@ class SymmetricLikelihoodRatioTest:
         self.v0 = lrt1.response
         self.v1 = lrt2.response
         self.conditioning_set = lrt1.conditioning_set
+        self.iterations = 0
 
         if lrt1.response < lrt2.response:
             self.lrt1: LikelihoodRatioTest = lrt1
@@ -311,6 +315,7 @@ class SymmetricLikelihoodRatioTest:
             self.lrt2.update_parameters(
                 [_update[self.lrt2.response] for _update in update]
             )
+        self.iterations += 1
 
     def _set_p_value(self):
         self.p_value = min(

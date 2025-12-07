@@ -130,6 +130,8 @@ class ComputationHelper:
     ):
         dmu_deta: np.ndarray = family.inverse_deriv(eta)
         var_y: np.ndarray = family.variance(mu)
+        dmu_deta = np.clip(dmu_deta, 1e-10, None)
+        var_y = np.clip(var_y, 1e-10, None)
 
         W = np.diag(((dmu_deta**2) / var_y).reshape(-1))
         z: np.ndarray = eta + (y - mu) / dmu_deta
@@ -154,13 +156,12 @@ class ComputationHelper:
     @staticmethod
     def fit_local_gamma(y, offset, family, max_iter=20, tol=1e-8):
         gamma = 0.0
-
         for _ in range(max_iter):
             eta = gamma + offset
-
             mu = family.inverse_link(eta)
             dmu_deta = family.inverse_deriv(eta)
             var = family.variance(mu)
+            var = np.clip(var, 1e-10, None)
 
             # Score (first derivative)
             grad = np.sum((y - mu) * dmu_deta / var)
@@ -174,6 +175,7 @@ class ComputationHelper:
 
             if np.linalg.norm(step) < tol:
                 break
+
         return gamma
 
     @staticmethod

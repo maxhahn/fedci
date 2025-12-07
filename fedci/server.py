@@ -7,6 +7,7 @@ from fedci.utils import InitialSchema, categorical_separator, ordinal_separator
 from .client import Client
 from .env import ADDITIVE_MASKING, DEBUG
 from .testing import TestEngine
+from .utils import BetaUpdateData
 
 
 class Server:
@@ -120,6 +121,10 @@ class Server:
             for client in clients:
                 update = client.compute(betas)
                 update = self._network_fetch_function(update)
+                update = {
+                    k: BetaUpdateData(**v) if type(v) is dict else v
+                    for k, v in update.items()
+                }
                 updates.append(update)
 
             self.test_engine.update_parameters(updates)
@@ -131,7 +136,10 @@ class Server:
                 )
                 for _beta in beta.tolist():
                     print(_beta)
-        return self.test_engine.get_result()
+        result = self.test_engine.get_result()
+        if result.iterations == 1:
+            return None
+        return result
 
     def run(self, max_cond_size=None):
         finished_tests = []
@@ -212,12 +220,13 @@ class ProxyServer:
     def builder(cls, **kwargs):
         return ProxyServerBuilder(cls, **kwargs)
 
-    def __init__(self, clients, max_iterations):
+    def __init__(self, clients, schema, max_iterations):
         self.clients = [c.root for c in clients]
         self.server = Server(
             self.clients,
-            _network_fetch_function=rpyc.classic.obtain,
+            schema=schema,
             max_iterations=max_iterations,
+            _network_fetch_function=rpyc.classic.obtain,
         )
 
     def __getattr__(self, name):
