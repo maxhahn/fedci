@@ -1,6 +1,5 @@
 import enum
 from dataclasses import dataclass
-from typing import Dict
 
 import polars as pl
 
@@ -40,10 +39,3 @@ class BetaUpdateData:
     llf: float
     xwx: np.ndarray
     xwz: np.ndarray
-
-
-@dataclass
-class ClientResponseData:
-    llf: float
-    deviance: float
-    beta_update_data: Dict[str, BetaUpdateData]

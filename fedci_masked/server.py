@@ -85,13 +85,18 @@ class Server:
             updates = []
             for client in clients:
                 update = client.compute(betas)
+                update = self._network_fetch_function(update)
                 updates.append(update)
 
             self.test_engine.update_parameters(updates)
         if DEBUG > 0:
+            print("*** Final betas")
             for key, beta in self.test_engine.test.get_betas().items():
-                print(key)
-                print(beta.tolist())
+                print(
+                    f"{key[0]} ~ {','.join(sorted(list(key[1])) + ['1'])} after {key[2]} iterations"
+                )
+                for _beta in beta.tolist():
+                    print(_beta)
         return self.test_engine.get_result()
 
     def run(self, max_cond_size=None):
@@ -169,7 +174,7 @@ class ProxyServer:
         return ProxyServerBuilder(cls, **kwargs)
 
     def __init__(self, clients, max_iterations):
-        self.clients = {i: c.root for i, c in enumerate(clients)}
+        self.clients = [c.root for c in clients]
         self.server = Server(
             self.clients,
             _network_fetch_function=rpyc.classic.obtain,

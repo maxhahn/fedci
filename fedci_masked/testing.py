@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 import scipy
 
-from .env import DEBUG, FIT_INTERCEPT
+from .env import DEBUG, FIT_INTERCEPT, RIDGE
 from .utils import BetaUpdateData
 
 
@@ -12,15 +12,16 @@ class RegressionTest:
         self,
         response: str,
         predictors: List[str],
-        beta: np.ndarray,
+        params: Tuple[int, int],
         convergence_threshold: float = 1e-3,
         max_iterations: int = 25,
     ):
         self.response: str = response
         self.predictors: Set[str] = set(predictors)
 
-        self.beta = beta
-        self.dof = len(beta)
+        self.num_classes, self.num_parameters = params
+        self.dof = self.num_classes * self.num_parameters
+        self.beta = np.zeros((self.dof, 1))
 
         self.convergence_threshold = convergence_threshold
         self.max_iterations = max_iterations
@@ -30,7 +31,15 @@ class RegressionTest:
         self.iterations: int = 0
 
     def __repr__(self):
-        response, predictors, iteration, beta = self.get_test_parameters()
+        (
+            response,
+            predictors,
+            iteration,
+        ) = (
+            self.response,
+            tuple(sorted(list(self.predictors))),
+            self.iterations,
+        )
         predictors = sorted(list(predictors))
         return f"RegressionTest {response} ~ {', '.join(predictors + ['1'])} - iteration {iteration}/{self.max_iterations}{' - not finished' if not self.is_finished() else ''}"
 
@@ -51,6 +60,8 @@ class RegressionTest:
             tuple(sorted(list(self.predictors))),
             self.iterations,
             self.beta,
+            self.num_classes,
+            self.num_parameters,
         )
 
     def update_parameters(self, update: List[BetaUpdateData]):
@@ -60,9 +71,14 @@ class RegressionTest:
         xwx = sum([_update.xwx for _update in update])
         xwz = sum([_update.xwz for _update in update])
 
-        if self.response == "A" and len(self.predictors) == 0:
-            for i, _update in enumerate(update):
-                print(i, _update.xwx)
+        if RIDGE > 0:
+            k = xwx.shape[0]
+            if FIT_INTERCEPT:
+                penalty_matrix = np.zeros((k, k))
+                penalty_matrix[:-1, :-1] = RIDGE * np.eye(k - 1)
+            else:
+                penalty_matrix = RIDGE * np.eye(k)
+            xwx += penalty_matrix
 
         try:
             xwx_inv = np.linalg.inv(xwx)
@@ -140,12 +156,12 @@ class LikelihoodRatioTest:
     def get_test_parameters(self):
         test_parameters = {}
         if not self.restricted_test.is_finished():
-            response, predictors, iteration, beta = (
+            response, predictors, iteration, beta, _, _ = (
                 self.restricted_test.get_test_parameters()
             )
             test_parameters[(response, predictors, iteration)] = beta
         if not self.unrestricted_test.is_finished():
-            response, predictors, iteration, beta = (
+            response, predictors, iteration, beta, _, _ = (
                 self.unrestricted_test.get_test_parameters()
             )
             test_parameters[(response, predictors, iteration)] = beta
@@ -153,14 +169,18 @@ class LikelihoodRatioTest:
 
     def get_betas(self):
         betas = {}
-        response, predictors, iteration, beta = (
+        response, predictors, iteration, beta, num_classes, num_predictors = (
             self.restricted_test.get_test_parameters()
         )
-        betas[(response, predictors, iteration)] = beta
-        response, predictors, iteration, beta = (
+        betas[(response, predictors, iteration)] = beta.reshape(
+            num_classes, num_predictors
+        )
+        response, predictors, iteration, beta, num_classes, num_predictors = (
             self.unrestricted_test.get_test_parameters()
         )
-        betas[(response, predictors, iteration)] = beta
+        betas[(response, predictors, iteration)] = beta.reshape(
+            num_classes, num_predictors
+        )
         return betas
 
     def update_parameters(self, update: List[Dict[Tuple[str], BetaUpdateData]]):
@@ -192,7 +212,7 @@ class LikelihoodRatioTest:
 
         if DEBUG >= 2:
             print(
-                f"*** Calculating p value for independence of {self.response} from {self.test_variable} given {self.conditioning_set}"
+                f"*** Calculating p value for independence of {self.response} from {self.test_variable} given {sorted(list(self.conditioning_set))}"
             )
             print(f"{t1_dof - t0_dof} DOFs = {t1_dof} T1 DOFs - {t0_dof} T0 DOFs")
             print(
@@ -231,7 +251,7 @@ class SymmetricLikelihoodRatioTest:
         lrt1_string = "\n\t".join(lrt1_string.split("\n"))
         lrt2_string = self.lrt2.__repr__()
         lrt2_string = "\n\t".join(lrt2_string.split("\n"))
-        return f"SymmetricLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, {val}\n\t- {lrt1_string}\n\t- {lrt2_string}"
+        return f"SymmetricLikelihoodRatioTest - {self.v0} indep {self.v1}{' | ' + ', '.join(sorted(list(self.conditioning_set))) if len(self.conditioning_set) > 0 else ''}, {val}\n\t- {lrt1_string}\n\t- {lrt2_string}"
 
     def is_finished(self):
         finished = self.lrt1.is_finished() and self.lrt2.is_finished()
@@ -308,59 +328,56 @@ class TestEngine:
                 num_params += 1
 
         if resp_var in self.category_expressions:
-            num_params *= (
-                len(self.category_expressions[resp_var]) - 1
-            )  # -1 for ref category
+            num_cats = len(self.category_expressions[resp_var]) - 1
         elif resp_var in self.ordinal_expressions:
-            num_params *= (
-                len(self.ordinal_expressions[resp_var]) - 1
-            )  # -1 for ref category
-        return num_params
+            num_cats = len(self.ordinal_expressions[resp_var]) - 1
+        else:
+            num_cats = 1
+        return (num_cats, num_params)
 
     def start_test(self, x: str, y: str, s: List[str]):
         if any([v not in self.schema for v in s + [x, y]]):
             raise Exception("The requested test requires unknown variables")
 
-        y_s_params = self._get_number_of_parameters(y, s)
-        y_sx_params = self._get_number_of_parameters(y, s + [x])
         x_s_params = self._get_number_of_parameters(x, s)
         x_sy_params = self._get_number_of_parameters(x, s + [y])
+        y_s_params = self._get_number_of_parameters(y, s)
+        y_sx_params = self._get_number_of_parameters(y, s + [x])
 
-        test_y_restricted = RegressionTest(
-            response=y,
-            predictors=s,
-            beta=np.zeros((y_s_params, 1)),
-            convergence_threshold=self.convergence_threshold,
-            max_iterations=self.max_iterations,
-        )
-        test_y_unrestricted = RegressionTest(
-            response=y,
-            predictors=s + [x],
-            beta=np.zeros((y_sx_params, 1)),
-            convergence_threshold=self.convergence_threshold,
-            max_iterations=self.max_iterations,
-        )
         test_x_restricted = RegressionTest(
             response=x,
             predictors=s,
-            beta=np.zeros((x_s_params, 1)),
+            params=x_s_params,
             convergence_threshold=self.convergence_threshold,
             max_iterations=self.max_iterations,
         )
         test_x_unrestricted = RegressionTest(
             response=x,
             predictors=s + [y],
-            beta=np.zeros((x_sy_params, 1)),
+            params=x_sy_params,
+            convergence_threshold=self.convergence_threshold,
+            max_iterations=self.max_iterations,
+        )
+        test_y_restricted = RegressionTest(
+            response=y,
+            predictors=s,
+            params=y_s_params,
+            convergence_threshold=self.convergence_threshold,
+            max_iterations=self.max_iterations,
+        )
+        test_y_unrestricted = RegressionTest(
+            response=y,
+            predictors=s + [x],
+            params=y_sx_params,
             convergence_threshold=self.convergence_threshold,
             max_iterations=self.max_iterations,
         )
 
-        lrt_y = LikelihoodRatioTest(
-            restricted_test=test_y_restricted, unrestricted_test=test_y_unrestricted
-        )
-
         lrt_x = LikelihoodRatioTest(
             restricted_test=test_x_restricted, unrestricted_test=test_x_unrestricted
+        )
+        lrt_y = LikelihoodRatioTest(
+            restricted_test=test_y_restricted, unrestricted_test=test_y_unrestricted
         )
 
         self.test = SymmetricLikelihoodRatioTest(lrt1=lrt_x, lrt2=lrt_y)
