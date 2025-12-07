@@ -6,6 +6,7 @@ import scipy
 
 from fedci.client import Client, ProxyClient
 from fedci.server import ProxyServer, Server
+from fedci.utils import InitialSchema, VariableType
 
 
 @pytest.fixture
@@ -67,8 +68,29 @@ def sample_data():
     return pl.from_dict(data)
 
 
+def test_local_server_single_client_given_schema(sample_data):
+    schema = InitialSchema(
+        schema={
+            "A": VariableType.BINARY,
+            "B": VariableType.ORDINAL,
+            "C": VariableType.CATEGORICAL,
+            "D": VariableType.CONTINUOS,
+        },
+        categorical_expressions={"C": ["A", "B"]},
+        ordinal_expressions={"B": ["1", "2", "3"]},
+    )
+
+    server = Server([Client("1", sample_data)], schema=schema)
+
+    result = server.test("A", "B", ["C"])
+
+    assert result.v0 == "A"
+    assert result.v1 == "B"
+    assert result.conditioning_set == ["C"]
+
+
 def test_local_server_single_client_single_test(sample_data):
-    server = Server({"1": Client(sample_data)})
+    server = Server([Client("1", sample_data)])
 
     result = server.test("A", "B", ["C"])
 
@@ -78,7 +100,7 @@ def test_local_server_single_client_single_test(sample_data):
 
 
 def test_local_server_single_client(sample_data):
-    server = Server({"1": Client(sample_data)})
+    server = Server([Client("1", sample_data)])
 
     results = server.run()
 
@@ -90,7 +112,7 @@ def test_local_server_single_client(sample_data):
 # this test covers diverging parameters
 def test_local_server_single_client_partial_data(sample_data):
     subdata = sample_data.head(10)
-    server = Server({"1": Client(subdata)})
+    server = Server([Client("1", subdata)])
 
     results = server.run()
 
@@ -101,7 +123,7 @@ def test_local_server_single_client_partial_data(sample_data):
 
 # this test covers no intercept no conditioning set tests
 def test_local_server_single_client_single_test_no_intercept(sample_data):
-    server = Server({"1": Client(sample_data)})
+    server = Server([Client("1", sample_data)])
 
     result = server.test("C", "D", [])
 
@@ -114,7 +136,7 @@ def test_local_server_multiple_clients(sample_data):
     df1 = sample_data[: len(sample_data) // 2]
     df2 = sample_data[len(sample_data) // 2 :]
 
-    server = Server({"1": Client(df1), "2": Client(df2)})
+    server = Server([Client("1", df1), Client("2", df2)])
     results = server.run()
 
     num_cols = len(sample_data.columns)
@@ -125,7 +147,7 @@ def test_local_server_multiple_clients_cond_size_0(sample_data):
     df1 = sample_data[: len(sample_data) // 2]
     df2 = sample_data[len(sample_data) // 2 :]
 
-    server = Server({"1": Client(df1), "2": Client(df2)})
+    server = Server([Client("1", df1), Client("2", df2)])
     results = server.run(max_cond_size=0)
 
     for r in sorted(results):
@@ -141,7 +163,7 @@ def test_local_server_multiple_clients_partial_overlap(sample_data):
     df1 = sample_data[: len(sample_data) // 2].select("A", "B", "C")
     df2 = sample_data[len(sample_data) // 2 :].select("B", "C", "D")
 
-    server = Server({"1": Client(df1), "2": Client(df2)})
+    server = Server([Client("1", df1), Client("2", df2)])
     results = server.run()
 
     c1_num_cols = len(df1.columns)
@@ -164,7 +186,7 @@ def test_local_server_multiple_clients_cond_size_1(sample_data):
     df1 = sample_data[: len(sample_data) // 2]
     df2 = sample_data[len(sample_data) // 2 :]
 
-    server = Server({"1": Client(df1), "2": Client(df2)})
+    server = Server([Client("1", df1), Client("2", df2)])
     results = server.run(max_cond_size=1)
 
     num_cols = len(sample_data.columns)
@@ -179,8 +201,8 @@ def test_proxy_server_multiple_clients_single_test(sample_data):
 
     port1, port2 = 18862, 18863
 
-    client1 = ProxyClient(df1)
-    client2 = ProxyClient(df2)
+    client1 = ProxyClient("1", df1)
+    client2 = ProxyClient("2", df2)
 
     t1 = threading.Thread(target=client1.start, args=(port1,), daemon=True)
     t2 = threading.Thread(target=client2.start, args=(port2,), daemon=True)
@@ -210,8 +232,8 @@ def test_proxy_server_multiple_clients(sample_data):
 
     port1, port2 = 18862, 18863
 
-    client1 = ProxyClient(df1)
-    client2 = ProxyClient(df2)
+    client1 = ProxyClient("1", df1)
+    client2 = ProxyClient("2", df2)
 
     t1 = threading.Thread(target=client1.start, args=(port1,), daemon=True)
     t2 = threading.Thread(target=client2.start, args=(port2,), daemon=True)
@@ -240,8 +262,8 @@ def test_proxy_server_multiple_clients_1_regressor(sample_data):
 
     port1, port2 = 18862, 18863
 
-    client1 = ProxyClient(df1)
-    client2 = ProxyClient(df2)
+    client1 = ProxyClient("1", df1)
+    client2 = ProxyClient("2", df2)
 
     t1 = threading.Thread(target=client1.start, args=(port1,), daemon=True)
     t2 = threading.Thread(target=client2.start, args=(port2,), daemon=True)

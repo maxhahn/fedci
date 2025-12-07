@@ -1,93 +1,136 @@
-from typing import Dict
+from typing import List, Optional
 
 import rpyc
 
+from fedci.utils import InitialSchema, categorical_separator, ordinal_separator
+
 from .client import Client
-from .env import DEBUG
+from .env import ADDITIVE_MASKING, DEBUG
 from .testing import TestEngine
 
 
 class Server:
     def __init__(
         self,
-        clients: Dict[str, Client],
-        max_regressors=None,
-        max_iterations=25,
+        clients: List[Client],
+        schema: Optional[InitialSchema] = None,
+        max_regressors: Optional[int] = None,
+        convergence_threshold: Optional[float] = 1e-3,
+        max_iterations: Optional[int] = 25,
         _network_fetch_function=lambda x: x,
     ):
         self._network_fetch_function = _network_fetch_function
-        self.clients = clients
-        self.client_schemas = {}
-        self.schema = {}
+        self.clients = {client.get_id(): client for client in clients}
+        assert len(self.clients) == len(clients), "Some Client IDs were duplicated"
 
-        for client_id, client in self.clients.items():
-            client_schema = client.get_data_schema()
-            self.client_schemas[client_id] = client_schema
-            for column, dtype in client_schema.items():
-                if column not in self.schema:
-                    self.schema[column] = dtype
-                    continue
-                assert self.schema[column] == dtype, (
-                    f"Schema mismatch between clients detected for variable {column}!"
-                )
-
-        self.category_expressions = {}
-        self.ordinal_expressions = {}
-        for client in self.clients.values():
-            for feature, expressions in client.get_categorical_expressions().items():
-                self.category_expressions[feature] = sorted(
-                    list(
-                        set(self.category_expressions.get(feature, [])).union(
-                            set(expressions)
+        if schema is None:
+            self.schema = {}
+            for client in self.clients.values():
+                client_schema = client.get_schema()
+                for column, dtype in client_schema.items():
+                    if column not in self.schema:
+                        self.schema[column] = dtype
+                        continue
+                    assert self.schema[column] == dtype, (
+                        f"Schema mismatch between clients detected for variable {column}!"
+                    )
+            self.categorical_expressions = {}
+            self.ordinal_expressions = {}
+            for client in self.clients.values():
+                for (
+                    feature,
+                    expressions,
+                ) in client.get_categorical_expressions().items():
+                    self.categorical_expressions[feature] = sorted(
+                        list(
+                            set(self.categorical_expressions.get(feature, [])).union(
+                                set(expressions)
+                            )
                         )
                     )
+                for feature, levels in client.get_ordinal_expressions().items():
+                    self.ordinal_expressions[feature] = sorted(
+                        list(
+                            set(self.ordinal_expressions.get(feature, [])).union(
+                                set(levels)
+                            )
+                        ),
+                        key=lambda x: int(x.split(ordinal_separator)[-1]),
+                    )
+        else:
+            self.schema = schema.schema
+            self.categorical_expressions = {}
+            for var, exprs in schema.categorical_expressions.items():
+                assert len(exprs) > 0, (
+                    f"Received empty list of categorical expressions for variable: {var}"
                 )
-            for feature, levels in client.get_ordinal_expressions().items():
-                self.ordinal_expressions[feature] = sorted(
-                    list(
-                        set(self.ordinal_expressions.get(feature, [])).union(
-                            set(levels)
-                        )
-                    ),
-                    key=lambda x: int(x.split("__ord__")[-1]),
+                assert not any([categorical_separator in expr for expr in exprs]), (
+                    f"Received illegal categorical expressions for variable: {var}"
                 )
+                self.categorical_expressions[var] = [
+                    f"{var}{categorical_separator}{expr}" for expr in exprs
+                ]
+            self.ordinal_expressions = {}
+            for var, exprs in schema.ordinal_expressions.items():
+                assert len(exprs) > 0, (
+                    f"Received empty list of categorical expressions for variable: {var}"
+                )
+                assert not any([ordinal_separator in expr for expr in exprs]), (
+                    f"Received illegal ordinal expressions for variable: {var}"
+                )
+                try:
+                    exprs = [int(expr) for expr in exprs]
+                except:
+                    assert False, (
+                        f"Received non-integer ordinal expression for variable: {var}"
+                    )
+                self.ordinal_expressions[var] = [
+                    f"{var}{ordinal_separator}{expr}" for expr in sorted(exprs)
+                ]
 
         for client in self.clients.values():
-            client.provide_expressions(
-                self.category_expressions, self.ordinal_expressions
+            client.set_global_expressions(
+                self.categorical_expressions, self.ordinal_expressions
             )
+        for client in self.clients.values():
+            client.set_clients(self.clients.copy())
 
         self.test_engine: TestEngine = TestEngine(
             schema=self.schema,
-            category_expressions=self.category_expressions,
+            category_expressions=self.categorical_expressions,
             ordinal_expressions=self.ordinal_expressions,
+            convergence_threshold=convergence_threshold,
             max_iterations=max_iterations,
         )
 
-    def test(self, x, y, s):
-        required_labels = sorted([x] + [y] + s)
-        selected_clients = {
-            client_id: client
-            for client_id, client in self.clients.items()
-            if set(required_labels).issubset(self.client_schemas[client_id].keys())
-        }
-        if len(selected_clients) == 0:
-            return None
-        assert len(selected_clients) > 0, (
-            f"No client is able to provide the data for {required_labels}"
-        )
+    def test(self, x: str, y: str, s: List[str]):
+        if x > y:
+            x, y = y, x
         self.test_engine.start_test(x, y, s)
+
         while not self.test_engine.is_finished():
-            y_label, X_labels, beta = self.test_engine.get_current_test_parameters()
-            results = {
-                client_id: client.compute(y_label, X_labels, beta)
-                for client_id, client in selected_clients.items()
-            }
-            results = {
-                client_id: self._network_fetch_function(result)
-                for client_id, result in results.items()
-            }
-            self.test_engine.update_current_test(results)
+            betas = self.test_engine.get_test_parameters()
+            clients = self.clients.values()
+            if ADDITIVE_MASKING:
+                for client in clients:
+                    client.exchange_masks(betas)
+                for client in clients:
+                    client.combine_masks(betas)
+            updates = []
+            for client in clients:
+                update = client.compute(betas)
+                update = self._network_fetch_function(update)
+                updates.append(update)
+
+            self.test_engine.update_parameters(updates)
+        if DEBUG > 0:
+            print("*** Final betas")
+            for key, beta in self.test_engine.test.get_betas().items():
+                print(
+                    f"{key[0]} ~ {','.join(sorted(list(key[1])) + ['1'])} after {key[2]} iterations"
+                )
+                for _beta in beta.tolist():
+                    print(_beta)
         return self.test_engine.get_result()
 
     def run(self, max_cond_size=None):
@@ -137,6 +180,10 @@ class ProxyServerBuilder:
         self.clients = []
         self.cls = cls
         self.max_iterations = 25
+        self.schema = None
+
+    def set_schema(self, schema):
+        self.schema = schema
 
     def set_max_iterations(self, max_iterations):
         self.max_iterations = max_iterations
@@ -155,6 +202,7 @@ class ProxyServerBuilder:
     def build(self):
         return self.cls(
             self.clients,
+            schema=self.schema,
             max_iterations=self.max_iterations,
         )
 
@@ -165,7 +213,7 @@ class ProxyServer:
         return ProxyServerBuilder(cls, **kwargs)
 
     def __init__(self, clients, max_iterations):
-        self.clients = {i: c.root for i, c in enumerate(clients)}
+        self.clients = [c.root for c in clients]
         self.server = Server(
             self.clients,
             _network_fetch_function=rpyc.classic.obtain,

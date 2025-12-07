@@ -1,35 +1,83 @@
-from itertools import chain, combinations
-from typing import Dict, List
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import scipy
 
-from .env import DEBUG, FIT_INTERCEPT, OVR, RIDGE
-from .utils import BetaUpdateData, ClientResponseData, VariableType
+from .env import DEBUG, FIT_INTERCEPT, RIDGE
+from .utils import BetaUpdateData
 
 
 class RegressionTest:
-    @classmethod
-    def create_and_overwrite_beta(cls, y_label, X_labels, beta):
-        c = cls(y_label, X_labels)
-        c.beta = beta
-        return c
+    def __init__(
+        self,
+        response: str,
+        predictors: List[str],
+        params: Tuple[int, int],
+        convergence_threshold: float = 1e-3,
+        max_iterations: int = 25,
+    ):
+        self.response: str = response
+        self.predictors: Set[str] = set(predictors)
 
-    def __init__(self, y_label: str, X_labels: List[str]):
-        self.y_label = y_label
-        self.X_labels = X_labels
+        self.num_classes, self.num_parameters = params
+        self.dof = self.num_classes * self.num_parameters
+        self.beta = np.zeros((self.dof, 1))
 
-        num_coeffs = len(X_labels)
-        if FIT_INTERCEPT:
-            num_coeffs += 1
-        self.beta = np.zeros(num_coeffs)
+        self.convergence_threshold = convergence_threshold
+        self.max_iterations = max_iterations
 
-    def update_beta(self, data: List[BetaUpdateData]):
-        xwx = sum([d.xwx for d in data])
-        xwz = sum([d.xwz for d in data])
+        self.previous_llf = None
+        self.llf: float = 0.0
+        self.iterations: int = 0
+
+    def __repr__(self):
+        (
+            response,
+            predictors,
+            iteration,
+        ) = (
+            self.response,
+            tuple(sorted(list(self.predictors))),
+            self.iterations,
+        )
+        predictors = sorted(list(predictors))
+        return f"RegressionTest {response} ~ {', '.join(predictors + ['1'])} - iteration {iteration}/{self.max_iterations}{' - not finished' if not self.is_finished() else ''}"
+
+    def get_change_in_llf(self):
+        if self.previous_llf is None:
+            return 1
+        return abs(self.llf - self.previous_llf)
+
+    def is_finished(self):
+        return (
+            self.get_change_in_llf() < self.convergence_threshold
+            or self.iterations >= self.max_iterations
+        )
+
+    def get_test_parameters(self):
+        return (
+            self.response,
+            tuple(sorted(list(self.predictors))),
+            self.iterations,
+            self.beta,
+            self.num_classes,
+            self.num_parameters,
+        )
+
+    def update_parameters(self, update: List[BetaUpdateData]):
+        if self.is_finished():
+            return
+        llf = sum([_update.llf for _update in update])
+        xwx = sum([_update.xwx for _update in update])
+        xwz = sum([_update.xwz for _update in update])
 
         if RIDGE > 0:
-            penalty_matrix = RIDGE * np.eye(len(xwx))
+            k = xwx.shape[0]
+            if FIT_INTERCEPT:
+                penalty_matrix = np.zeros((k, k))
+                penalty_matrix[:-1, :-1] = RIDGE * np.eye(k - 1)
+            else:
+                penalty_matrix = RIDGE * np.eye(k)
             xwx += penalty_matrix
 
         try:
@@ -37,327 +85,246 @@ class RegressionTest:
         except np.linalg.LinAlgError:
             xwx_inv = np.linalg.pinv(xwx)
 
-        new_beta = (xwx_inv @ xwz) + RIDGE * xwx_inv @ self.beta
-
-        if np.any(np.isnan(new_beta)):
+        if DEBUG > 3:
             print(
-                f"Coefficients are diverging. You may rerun with RIDGE parameter. Stopping updates..."
+                f"{self.response} ~ {sorted(list(self.predictors))} - Iteration {self.iterations}/{self.max_iterations}"
             )
-            return
+            print(
+                f"{self.beta.reshape(-1).tolist()} -> {(xwx_inv @ xwz).reshape(-1).tolist()}"
+            )
+            print(
+                f"{'None' if self.previous_llf is None else self.previous_llf} -> {self.llf}"
+            )
 
-        self.beta = new_beta
+        self.previous_llf = self.llf
+        self.llf = llf
 
-    def __lt__(self, other):
-        if len(self.X_labels) < len(other.X_labels):
-            return True
-        elif len(self.X_labels) > len(other.X_labels):
-            return False
+        self.beta = xwx_inv @ xwz
 
-        if self.y_label < other.y_label:
-            return True
-        elif self.y_label > other.y_label:
-            return False
-
-        if tuple(sorted(self.X_labels)) < tuple(sorted(other.X_labels)):
-            return True
-        elif tuple(sorted(self.X_labels)) > tuple(sorted(other.X_labels)):
-            return False
-
-        return True
-
-    def __repr__(self):
-        return f"RegressionTest {self.y_label} ~ {', '.join(self.X_labels + ['1'])} - beta: {self.beta}"
-
-
-class Test:
-    def __init__(
-        self,
-        y_label,
-        X_labels: List[str],
-        y_labels: List[str] = None,
-        max_iterations=25,
-        y_type=None,
-        required_labels=None,
-    ):
-        self.y_label = y_label
-        self.X_labels = X_labels
-        if y_labels is None:
-            y_labels = [y_label]
-        self.y_labels = y_labels
-        self.tests: Dict[str, RegressionTest] = {
-            _y_label: RegressionTest(_y_label, X_labels) for _y_label in y_labels
-        }
-
-        if required_labels is None:
-            required_labels = self.get_required_labels(get_from_parameters=True)
-        self.required_labels = required_labels
-
-        if y_type == VariableType.CATEGORICAL and OVR == 0:
-            _beta = np.concatenate([t.beta for t in self.tests.values()])
-            self.tests = {
-                y_label: RegressionTest.create_and_overwrite_beta(
-                    y_label, X_labels, _beta
-                )
-            }
-
-        self.llf = None
-        self.last_deviance = None
-        self.deviance = 0
-        self.iterations = 0
-        self.max_iterations = max_iterations
-
-    def is_finished(self):
-        return (
-            self.get_change_in_deviance() < 1e-3
-            or self.iterations >= self.max_iterations
-        )
-
-    def update_betas(self, data: Dict[str, ClientResponseData]):
-        self.llf = {
-            client_id: client_response.llf
-            for client_id, client_response in data.items()
-        }
-        self.last_deviance = self.deviance
-        self.deviance = sum(
-            client_response.deviance for client_response in data.values()
-        )
-
-        if self.is_finished():
-            return
-
-        beta_update_data = [
-            client_response.beta_update_data for client_response in data.values()
-        ]
-        # Transform data from list of dicts to dict of lists => all data for one y_label grouped together
-        beta_update_data = {
-            k: [dic[k] for dic in beta_update_data] for k in beta_update_data[0]
-        }
-
-        for y_label, _data in beta_update_data.items():
-            self.tests[y_label].update_beta(_data)
         self.iterations += 1
-
-    def get_degrees_of_freedom(self):
-        # len tests -> num_cats -1
-        # len X_labels + 1 -> x vars, intercept
-        return len(self.y_labels) * (len(self.X_labels) + 1)
-
-    def get_llf(self, client_subset=None):
-        if client_subset is not None:
-            return sum(
-                [
-                    llf
-                    for client_id, llf in self.llf.items()
-                    if client_id in client_subset
-                ]
-            )
-        return sum([llf for llf in self.llf.values()]) if self.llf is not None else 0
-
-    def get_providing_clients(self):
-        if self.llf is None:
-            return []
-        return set(self.llf.keys())
-
-    def get_beta(self):
-        return {t.y_label: t.beta for t in self.tests.values()}
-
-    def get_required_labels(self, get_from_parameters=False):
-        if not get_from_parameters:
-            return self.required_labels
-
-        vars = {self.y_label}
-        for var in self.X_labels:
-            if "__cat__" in var:
-                vars.add(var.split("__cat__")[0])
-            elif "__ord__" in var:
-                vars.add(var.split("__ord__")[0])
-            else:
-                vars.add(var)
-        return vars
-
-    def get_change_in_deviance(self):
-        if self.last_deviance is None:
-            return 1
-        return abs(self.deviance - self.last_deviance)
-
-    def get_relative_change_in_deviance(self):
-        if self.last_deviance is None:
-            return 1
-        return abs(self.deviance - self.last_deviance) / (1e-5 + abs(self.deviance))
-
-    def __repr__(self):
-        test_string = "\n\t- " + "\n\t- ".join(
-            [str(t) for t in sorted(self.tests.values())]
-        )
-        test_title = f"{self.y_label} ~ {','.join(list(set([l.split('__')[0] for l in self.X_labels])))},1"
-        return f"Test {test_title} - llf: {self.get_llf()}, deviance: {self.deviance}, {self.iterations}/{self.max_iterations} iterations{test_string}"
-
-    def __eq__(self, other):
-        req_labels = self.get_required_labels(get_from_parameters=True)
-        other_labels = other.get_required_labels(get_from_parameters=True)
-        return (
-            len(req_labels) == len(other_labels)
-            and self.y_label == other.y_label
-            and tuple(sorted(self.X_labels)) == tuple(sorted(other.X_labels))
-        )
-
-    def __lt__(self, other):
-        req_labels = self.get_required_labels(get_from_parameters=True)
-        other_labels = other.get_required_labels(get_from_parameters=True)
-        if len(req_labels) < len(other_labels):
-            return True
-        elif len(req_labels) > len(other_labels):
-            return False
-
-        if self.y_label < other.y_label:
-            return True
-        elif self.y_label > other.y_label:
-            return False
-
-        if tuple(sorted(self.X_labels)) < tuple(sorted(other.X_labels)):
-            return True
-        elif tuple(sorted(self.X_labels)) > tuple(sorted(other.X_labels)):
-            return False
-
-        return False
 
 
 class LikelihoodRatioTest:
-    def __init__(self, t0: Test, t1: Test) -> None:
-        assert t0.y_label == t1.y_label, (
-            "Provided tests do not predict the same variable"
+    def __init__(
+        self, restricted_test: RegressionTest, unrestricted_test: RegressionTest
+    ):
+        assert restricted_test.response == unrestricted_test.response, (
+            "The provided tests do not fit the same response variable"
+        )
+        self.response: str = restricted_test.response
+
+        assert (
+            len(set(restricted_test.predictors) - set(unrestricted_test.predictors))
+            == 0
+        ), "The provided tests are not properly nested"
+
+        predictor_difference = list(
+            set(unrestricted_test.predictors) - set(restricted_test.predictors)
         )
 
-        t0_req_labels = t0.get_required_labels(get_from_parameters=True) - {t0.y_label}
-        t1_req_labels = t1.get_required_labels(get_from_parameters=True) - {t0.y_label}
-        assert t0_req_labels.issubset(t1_req_labels), "Provided tests are not nested"
-        assert len(t0_req_labels) + 1 == len(t1_req_labels), (
-            "Provided tests differ by more than one regressor variable"
+        assert len(predictor_difference) == 1, (
+            "The provided tests differ in more than one variable"
         )
 
-        self.y_label = t0.y_label
-        self.x_label = list(t1_req_labels - t0_req_labels)[0]
-        self.s_labels = sorted(list(t0_req_labels))
+        self.test_variable: str = predictor_difference[0]
+        self.conditioning_set: Set[str] = restricted_test.predictors
 
-        self.p_val = self._run_ci_test(t0, t1)
+        self.restricted_test: RegressionTest = restricted_test
+        self.unrestricted_test: RegressionTest = unrestricted_test
 
-    def _run_ci_test(self, t0: Test, t1: Test):
-        client_subset = t1.get_providing_clients()
-        t0_llf = t0.get_llf(client_subset)
-        t1_llf = t1.get_llf(client_subset)
+        self.p_value: Optional[float] = None
 
-        t0_dof = t0.get_degrees_of_freedom()
-        t1_dof = t1.get_degrees_of_freedom()
+    def __repr__(self):
+        if self.p_value is None:
+            val = "not finished"
+        else:
+            val = f"p: {self.p_value:.4f}"
+        restricted_test_string = self.restricted_test.__repr__()
+        restricted_test_string = "\n\t".join(restricted_test_string.split("\n"))
+        unrestricted_test_string = self.unrestricted_test.__repr__()
+        unrestricted_test_string = "\n\t".join(unrestricted_test_string.split("\n"))
+        return f"LikelihoodRatioTest - y: {self.response}, x: {self.test_variable}, S: {sorted(list(self.conditioning_set))}, {val}\n\t- {restricted_test_string}\n\t- {unrestricted_test_string}"
 
-        p_val = scipy.stats.chi2.sf(2 * (t1_llf - t0_llf), t1_dof - t0_dof).item()
+    def __lt__(self, other):
+        if len(self.conditioning_set) < len(other.conditioning_set):
+            return True
+        if (
+            len(self.conditioning_set) == len(other.conditioning_set)
+            and self.response < other.response
+        ):
+            return True
+        if (
+            len(self.conditioning_set) == len(other.conditioning_set)
+            and self.response == other.response
+            and self.test_variable < other.test_variable
+        ):
+            return True
+        if (
+            len(self.conditioning_set) == len(other.conditioning_set)
+            and self.response == other.response
+            and self.test_variable == other.test_variable
+            and sorted(list(self.conditioning_set))
+            < sorted(list(other.conditioning_set))
+        ):
+            return True
+        return False
+
+    def is_finished(self):
+        finished = (
+            self.restricted_test.is_finished() and self.unrestricted_test.is_finished()
+        )
+        if finished and self.p_value is None:
+            self._set_p_value()
+        return finished
+
+    def get_test_parameters(self):
+        test_parameters = {}
+        if not self.restricted_test.is_finished():
+            response, predictors, iteration, beta, _, _ = (
+                self.restricted_test.get_test_parameters()
+            )
+            test_parameters[(response, predictors, iteration)] = beta
+        if not self.unrestricted_test.is_finished():
+            response, predictors, iteration, beta, _, _ = (
+                self.unrestricted_test.get_test_parameters()
+            )
+            test_parameters[(response, predictors, iteration)] = beta
+        return test_parameters
+
+    def get_betas(self):
+        betas = {}
+        response, predictors, iteration, beta, num_classes, num_predictors = (
+            self.restricted_test.get_test_parameters()
+        )
+        betas[(response, predictors, iteration)] = beta.reshape(
+            num_classes, num_predictors
+        )
+        response, predictors, iteration, beta, num_classes, num_predictors = (
+            self.unrestricted_test.get_test_parameters()
+        )
+        betas[(response, predictors, iteration)] = beta.reshape(
+            num_classes, num_predictors
+        )
+        return betas
+
+    def update_parameters(self, update: List[Dict[Tuple[str], BetaUpdateData]]):
+        if not self.restricted_test.is_finished():
+            self.restricted_test.update_parameters(
+                [
+                    _update[tuple(sorted(list(self.restricted_test.predictors)))]
+                    for _update in update
+                ]
+            )
+        if not self.unrestricted_test.is_finished():
+            self.unrestricted_test.update_parameters(
+                [
+                    _update[tuple(sorted(list(self.unrestricted_test.predictors)))]
+                    for _update in update
+                ]
+            )
+
+    def _set_p_value(self):
+        t0_llf = self.restricted_test.llf
+        t1_llf = self.unrestricted_test.llf
+
+        t0_dof = self.restricted_test.dof
+        t1_dof = self.unrestricted_test.dof
+
+        self.p_value = scipy.stats.chi2.sf(
+            2 * (t1_llf - t0_llf), t1_dof - t0_dof
+        ).item()
 
         if DEBUG >= 2:
             print(
-                f"*** Calculating p value for independence of {self.y_label} from {self.x_label} given {self.s_labels}"
+                f"*** Calculating p value for independence of {self.response} from {self.test_variable} given {sorted(list(self.conditioning_set))}"
             )
             print(f"{t1_dof - t0_dof} DOFs = {t1_dof} T1 DOFs - {t0_dof} T0 DOFs")
             print(
                 f"{2 * (t1_llf - t0_llf):.4f} Test statistic = 2*({t1_llf:.4f} T1 LLF - {t0_llf:.4f} T0 LLF)"
             )
-            print(f"p value = {p_val:.6f}")
-        return p_val
-
-    def __repr__(self):
-        return f"LikelihoodRatioTest - y: {self.y_label}, x: {self.x_label}, S: {self.s_labels}, p: {self.p_val:.4f}"
-
-    def __lt__(self, other):
-        if len(self.s_labels) < len(other.s_labels):
-            return True
-        elif len(self.s_labels) > len(other.s_labels):
-            return False
-
-        if self.y_label < other.y_label:
-            return True
-        elif self.y_label > other.y_label:
-            return False
-
-        if self.x_label < other.x_label:
-            return True
-        elif self.x_label > other.x_label:
-            return False
-
-        if tuple(sorted(self.s_labels)) < tuple(sorted(other.s_labels)):
-            return True
-        elif tuple(sorted(self.s_labels)) > tuple(sorted(other.s_labels)):
-            return False
-
-        return True
+            print(f"p value = {self.p_value:.6f}")
 
 
 class SymmetricLikelihoodRatioTest:
-    def __init__(self, lrt0: LikelihoodRatioTest, lrt1: LikelihoodRatioTest):
+    def __init__(self, lrt1: LikelihoodRatioTest, lrt2: LikelihoodRatioTest):
         assert (
-            lrt0.y_label == lrt1.x_label
-            and lrt1.y_label == lrt0.x_label
-            and sorted(lrt0.s_labels) == sorted(lrt1.s_labels)
-        ), "Tests do not match"
+            lrt1.response == lrt2.test_variable
+            and lrt1.test_variable == lrt2.response
+            and lrt1.conditioning_set == lrt2.conditioning_set
+        ), "The provided tests are not symmetrical"
 
-        self.lrt0: LikelihoodRatioTest = lrt0
-        self.lrt1: LikelihoodRatioTest = lrt1
+        self.v0 = lrt1.response
+        self.v1 = lrt2.response
+        self.conditioning_set = lrt1.conditioning_set
 
-        self.v0, self.v1 = sorted([lrt0.y_label, lrt1.y_label])
-        self.conditioning_set = sorted(lrt0.s_labels)
+        if lrt1.response < lrt2.response:
+            self.lrt1: LikelihoodRatioTest = lrt1
+            self.lrt2: LikelihoodRatioTest = lrt2
+        else:
+            self.lrt1: LikelihoodRatioTest = lrt2
+            self.lrt2: LikelihoodRatioTest = lrt1
 
-        self.p_val = min(
-            2 * min(self.lrt0.p_val, self.lrt1.p_val),
-            max(self.lrt0.p_val, self.lrt1.p_val),
+        self.p_value: Optional[float] = None
+
+    def __repr__(self):
+        if self.p_value is None:
+            val = "not finished"
+        else:
+            val = f"p: {self.p_value:.4f}"
+        lrt1_string = self.lrt1.__repr__()
+        lrt1_string = "\n\t".join(lrt1_string.split("\n"))
+        lrt2_string = self.lrt2.__repr__()
+        lrt2_string = "\n\t".join(lrt2_string.split("\n"))
+        return f"SymmetricLikelihoodRatioTest - {self.v0} indep {self.v1}{' | ' + ', '.join(sorted(list(self.conditioning_set))) if len(self.conditioning_set) > 0 else ''}, {val}\n\t- {lrt1_string}\n\t- {lrt2_string}"
+
+    def __lt__(self, other):
+        if self.lrt1 < other.lrt1:
+            return True
+        if self.lrt1 == other.lrt1 and self.lrt2 < other.lrt2:
+            return True
+        return False
+
+    def is_finished(self):
+        finished = self.lrt1.is_finished() and self.lrt2.is_finished()
+        if finished and self.p_value is None:
+            self._set_p_value()
+        return finished
+
+    def get_test_parameters(self):
+        test_parameters = (
+            self.lrt1.get_test_parameters() | self.lrt2.get_test_parameters()
+        )
+        return test_parameters
+
+    def get_betas(self):
+        betas = self.lrt1.get_betas() | self.lrt2.get_betas()
+        return betas
+
+    def update_parameters(
+        self, update: List[Dict[str, Dict[Tuple[str], BetaUpdateData]]]
+    ):
+        if not self.lrt1.is_finished():
+            self.lrt1.update_parameters(
+                [_update[self.lrt1.response] for _update in update]
+            )
+        if not self.lrt2.is_finished():
+            self.lrt2.update_parameters(
+                [_update[self.lrt2.response] for _update in update]
+            )
+
+    def _set_p_value(self):
+        self.p_value = min(
+            2 * min(self.lrt1.p_value, self.lrt2.p_value),
+            max(self.lrt1.p_value, self.lrt2.p_value),
         )
 
         if DEBUG >= 2:
             print(
-                f"*** Combining p values for symmetry of tests between {self.v0} and {self.v1} given {self.conditioning_set}"
+                f"*** Combining p values for symmetry of tests between {self.lrt1.response} and {self.lrt2.response} given {self.lrt1.conditioning_set}"
             )
-            print(f"p value {self.lrt0.y_label}: {self.lrt0.p_val}")
-            print(f"p value {self.lrt1.y_label}: {self.lrt1.p_val}")
-            print(f"p value = {self.p_val:.4f}")
-
-    def __repr__(self):
-        return f"SymmetricLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val:.4f}\n\t- {self.lrt0}\n\t- {self.lrt1}"
-
-    def __lt__(self, other):
-        if len(self.conditioning_set) < len(other.conditioning_set):
-            return True
-        elif len(self.conditioning_set) > len(other.conditioning_set):
-            return False
-
-        if self.v0 < other.v0:
-            return True
-        elif self.v0 > other.v0:
-            return False
-
-        if self.v1 < other.v1:
-            return True
-        elif self.v1 > other.v1:
-            return False
-
-        if tuple(self.conditioning_set) < tuple(other.conditioning_set):
-            return True
-        elif tuple(self.conditioning_set) > tuple(other.conditioning_set):
-            return False
-
-        return False
-
-    def __eq__(self, other):
-        return (
-            self.v0 == other.v0
-            and self.v1 == other.v1
-            and self.conditioning_set == other.conditioning_set
-        )
-
-
-class EmptyLikelihoodRatioTest(SymmetricLikelihoodRatioTest):
-    def __init__(self, v0, v1, conditioning_set, p_val):
-        self.v0, self.v1 = sorted([v0, v1])
-        self.conditioning_set = conditioning_set
-        self.p_val = p_val
-
-    def __repr__(self):
-        return f"EmptyLikelihoodRatioTest - v0: {self.v0}, v1: {self.v1}, conditioning set: {self.conditioning_set}, p: {self.p_val:.4f}"
+            print(f"p value {self.lrt1.response}: {self.lrt1.p_value}")
+            print(f"p value {self.lrt2.response}: {self.lrt2.p_value}")
+            print(f"p value = {self.p_value:.4f}")
 
 
 class TestEngine:
@@ -366,155 +333,107 @@ class TestEngine:
         schema,
         category_expressions,
         ordinal_expressions,
+        convergence_threshold=1e-3,
         max_iterations=25,
     ):
         self.schema = schema
+        self.convergence_threshold = convergence_threshold
         self.max_iterations = max_iterations
-
         self.category_expressions = category_expressions
         self.ordinal_expressions = ordinal_expressions
+        self.test = None
 
-        self.currently_required_labels = None
-        self.current_test = None
+    def _get_number_of_parameters(self, resp_var, cond_vars):
+        num_params = 1 if FIT_INTERCEPT else 0
 
-        self.variable_expressions = {}
-        for y_var in schema.keys():
-            if (
-                schema[y_var] == VariableType.CONTINUOS
-                or schema[y_var] == VariableType.BINARY
-            ):
-                self.variable_expressions[y_var] = None
-            elif schema[y_var] == VariableType.CATEGORICAL:
-                assert y_var in category_expressions, (
-                    f"Categorical variable {y_var} is not in expression mapping"
-                )
-                self.variable_expressions[y_var] = category_expressions[y_var][:-1]
-            elif schema[y_var] == VariableType.ORDINAL:
-                assert y_var in ordinal_expressions, (
-                    f"Ordinal variable {y_var} is not in expression mapping"
-                )
-                self.variable_expressions[y_var] = ordinal_expressions[y_var][:-1]
+        for var in cond_vars:
+            if var in self.category_expressions:
+                num_params += (
+                    len(self.category_expressions[var]) - 1
+                )  # -1 for ref category
+            elif var in self.ordinal_expressions:
+                num_params += (
+                    len(self.ordinal_expressions[var]) - 1
+                )  # -1 for ref category
             else:
-                raise Exception(f"Unknown variable type {schema[y_var]} encountered!")
+                num_params += 1
 
-    def start_test(self, x, y, s):
-        def expand_variable(var, category_expressions, ordinal_expressions):
-            res = []
-            if var in category_expressions:
-                res.extend(sorted(list(category_expressions[var]))[1:])
-            elif var in ordinal_expressions:
-                res.extend(sorted(list(ordinal_expressions[var]))[1:])
-            else:
-                res.append(var)
-            return res
+        if resp_var in self.category_expressions:
+            num_cats = len(self.category_expressions[resp_var]) - 1
+        elif resp_var in self.ordinal_expressions:
+            num_cats = len(self.ordinal_expressions[resp_var]) - 1
+        else:
+            num_cats = 1
+        return (num_cats, num_params)
 
-        base_cond_set = []
-        for cond_var in s:
-            base_cond_set.extend(
-                expand_variable(
-                    cond_var, self.category_expressions, self.ordinal_expressions
-                )
-            )
+    def start_test(self, x: str, y: str, s: List[str]):
+        if any([v not in self.schema for v in s + [x, y]]):
+            raise Exception("The requested test requires unknown variables")
 
-        self.currently_required_labels = set([x] + [y] + s)
+        x_s_params = self._get_number_of_parameters(x, s)
+        x_sy_params = self._get_number_of_parameters(x, s + [y])
+        y_s_params = self._get_number_of_parameters(y, s)
+        y_sx_params = self._get_number_of_parameters(y, s + [x])
 
-        self.upcoming_tests = []
-
-        full_cond_set = base_cond_set + expand_variable(
-            x, self.category_expressions, self.ordinal_expressions
+        test_x_restricted = RegressionTest(
+            response=x,
+            predictors=s,
+            params=x_s_params,
+            convergence_threshold=self.convergence_threshold,
+            max_iterations=self.max_iterations,
         )
-        self.upcoming_tests.append(
-            Test(
-                y_label=y,
-                X_labels=sorted(list(base_cond_set)),
-                y_labels=self.variable_expressions[y],
-                max_iterations=self.max_iterations,
-                y_type=self.schema[y],
-                required_labels=self.currently_required_labels,
-            )
+        test_x_unrestricted = RegressionTest(
+            response=x,
+            predictors=s + [y],
+            params=x_sy_params,
+            convergence_threshold=self.convergence_threshold,
+            max_iterations=self.max_iterations,
         )
-        self.upcoming_tests.append(
-            Test(
-                y_label=y,
-                X_labels=sorted(list(full_cond_set)),
-                y_labels=self.variable_expressions[y],
-                max_iterations=self.max_iterations,
-                y_type=self.schema[y],
-                required_labels=self.currently_required_labels,
-            )
+        test_y_restricted = RegressionTest(
+            response=y,
+            predictors=s,
+            params=y_s_params,
+            convergence_threshold=self.convergence_threshold,
+            max_iterations=self.max_iterations,
         )
-
-        full_cond_set = base_cond_set + expand_variable(
-            y, self.category_expressions, self.ordinal_expressions
-        )
-        self.upcoming_tests.append(
-            Test(
-                y_label=x,
-                X_labels=sorted(list(base_cond_set)),
-                y_labels=self.variable_expressions[x],
-                max_iterations=self.max_iterations,
-                y_type=self.schema[x],
-                required_labels=self.currently_required_labels,
-            )
-        )
-        self.upcoming_tests.append(
-            Test(
-                y_label=x,
-                X_labels=sorted(list(full_cond_set)),
-                y_labels=self.variable_expressions[x],
-                max_iterations=self.max_iterations,
-                y_type=self.schema[x],
-                required_labels=self.currently_required_labels,
-            )
+        test_y_unrestricted = RegressionTest(
+            response=y,
+            predictors=s + [x],
+            params=y_sx_params,
+            convergence_threshold=self.convergence_threshold,
+            max_iterations=self.max_iterations,
         )
 
-        self.finished_tests = []
+        lrt_x = LikelihoodRatioTest(
+            restricted_test=test_x_restricted, unrestricted_test=test_x_unrestricted
+        )
+        lrt_y = LikelihoodRatioTest(
+            restricted_test=test_y_restricted, unrestricted_test=test_y_unrestricted
+        )
 
-        self.current_test = self.upcoming_tests[0]
-        del self.upcoming_tests[0]
-
-    def get_currently_required_labels(self):
-        if self.currently_required_labels is None:
-            return None
-        return self.currently_required_labels
+        self.test = SymmetricLikelihoodRatioTest(lrt1=lrt_x, lrt2=lrt_y)
 
     def is_finished(self):
-        if self.current_test is None:
+        if self.test is None:
             return True
-        if len(self.upcoming_tests) == 0 and self.current_test.is_finished():
-            return True
-        return False
+        return self.test.is_finished()
 
-    def get_current_test_parameters(self):
-        if self.is_finished():
-            return None, None, None
-        return (
-            self.current_test.y_label,
-            self.current_test.X_labels,
-            self.current_test.get_beta(),
-        )
+    def get_test_parameters(self):
+        return self.test.get_test_parameters()
 
-    def update_current_test(self, client_responses: Dict[str, ClientResponseData]):
-        if self.is_finished():
-            return
-        self.current_test.update_betas(client_responses)
-        if self.current_test.is_finished():
-            self.finished_tests.append(self.current_test)
-            if self.is_finished():
-                self.current_test = None
-                self.upcoming_tests = None
-            else:
-                self.current_test = self.upcoming_tests[0]
-                del self.upcoming_tests[0]
+    def update_parameters(
+        self, update: List[Dict[Tuple[str, Tuple[str], int], BetaUpdateData]]
+    ):
+        new_update = []
+        for _update in update:
+            _new_update = {self.test.v0: {}, self.test.v1: {}}
+            for (resp_var, cond_vars, _), payload in _update.items():
+                _new_update[resp_var][cond_vars] = payload
+            new_update.append(_new_update)
+        update: List[Dict[str, Dict[Tuple[str], BetaUpdateData]]] = new_update
+        return self.test.update_parameters(update)
 
     def get_result(self):
-        t0_a, t1_a, t0_b, t1_b = self.finished_tests
-        assert t0_a.y_label == t1_a.y_label and t0_b.y_label == t1_b.y_label, (
-            "Y variables of tests do not match"
-        )
-
-        self.finished_tests = None
-
-        return SymmetricLikelihoodRatioTest(
-            LikelihoodRatioTest(t0_a, t1_a), LikelihoodRatioTest(t0_b, t1_b)
-        )
+        if not self.is_finished():
+            return None
+        return self.test
