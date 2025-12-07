@@ -2,7 +2,12 @@ from typing import List, Optional
 
 import rpyc
 
-from fedci.utils import InitialSchema, categorical_separator, ordinal_separator
+from fedci.utils import (
+    InitialSchema,
+    categorical_separator,
+    constant_colname,
+    ordinal_separator,
+)
 
 from .client import Client
 from .env import ADDITIVE_MASKING, DEBUG
@@ -88,6 +93,10 @@ class Server:
                 self.ordinal_expressions[var] = [
                     f"{var}{ordinal_separator}{expr}" for expr in sorted(exprs)
                 ]
+
+        assert constant_colname not in self.schema, (
+            f"Received reserved variable name: {constant_colname}"
+        )
 
         for client in self.clients.values():
             client.set_global_expressions(
