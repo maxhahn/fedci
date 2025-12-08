@@ -95,6 +95,9 @@ class ComputationHelper:
         family: DistributionalFamily,
     ):
         eta = np.zeros_like(y)
+        if CLIENT_HETEROGENIETY:
+            gamma = ComputationHelper.fit_local_gamma(y=y, offset=eta, family=family)
+            eta += gamma
         mu: np.ndarray = family.inverse_link(eta)
 
         llf: float = family.loglik(y, mu)
@@ -113,9 +116,7 @@ class ComputationHelper:
     ):
         eta: np.ndarray = X @ beta
         if CLIENT_HETEROGENIETY:
-            gamma = ComputationHelper.fit_local_gamma(
-                y=y, offset=X @ beta, family=family
-            )
+            gamma = ComputationHelper.fit_local_gamma(y=y, offset=eta, family=family)
             eta += gamma
         mu: np.ndarray = family.inverse_link(eta)
         return eta, mu
@@ -285,7 +286,7 @@ class ContinousComputationUnit(ComputationUnit):
     ):
         y, X = get_data(data, response, predictors)
         if X is None:
-            return ComputationHelper.run_const_model(y, Gaussian())
+            return ComputationHelper.run_const_model(y, Gaussian)
 
         assert y.shape[0] == X.shape[0] and X.shape[1] == beta.shape[0], (
             "Shape mismatch between response, predictors, and beta"
@@ -303,7 +304,7 @@ class BinaryComputationUnit(ComputationUnit):
     ):
         y, X = get_data(data, response, predictors)
         if X is None:
-            return ComputationHelper.run_const_model(y, Binomial())
+            return ComputationHelper.run_const_model(y, Binomial)
         assert y.shape[0] == X.shape[0] and X.shape[1] == beta.shape[0], (
             "Shape mismatch between response, predictors, and beta"
         )
