@@ -115,11 +115,12 @@ class ComputationHelper:
         family: DistributionalFamily,
     ):
         eta: np.ndarray = X @ beta
+        mu: np.ndarray = family.inverse_link(eta)
         if CLIENT_HETEROGENIETY:
             gamma = ComputationHelper.fit_local_gamma(y=y, offset=eta, family=family)
-            eta += gamma
-        mu: np.ndarray = family.inverse_link(eta)
-        return eta, mu
+        else:
+            gamma = np.zeros_like(eta)
+        return eta, mu, gamma, family.inverse_link(eta + gamma)
 
     @staticmethod
     def get_irls_step(
@@ -127,6 +128,7 @@ class ComputationHelper:
         X: np.ndarray,
         eta: np.ndarray,
         mu: np.ndarray,
+        gamma,
         family: DistributionalFamily,
     ):
         dmu_deta: np.ndarray = family.inverse_deriv(eta)
@@ -135,7 +137,7 @@ class ComputationHelper:
         var_y = np.clip(var_y, 1e-10, None)
 
         W = np.diag(((dmu_deta**2) / var_y).reshape(-1))
-        z: np.ndarray = eta + (y - mu) / dmu_deta
+        z: np.ndarray = (eta - gamma) + (y - mu) / dmu_deta
 
         xw = X.T @ W
         xwx = xw @ X
@@ -149,9 +151,9 @@ class ComputationHelper:
         beta: np.ndarray,
         family: DistributionalFamily,
     ):
-        eta, mu = ComputationHelper.run_prediction(y, X, beta, family)
-        xwx, xwz = ComputationHelper.get_irls_step(y, X, eta, mu, family)
-        llf: float = family.loglik(y, mu)
+        eta, mu, gamma, mu_gamma = ComputationHelper.run_prediction(y, X, beta, family)
+        xwx, xwz = ComputationHelper.get_irls_step(y, X, eta, mu, gamma, family)
+        llf: float = family.loglik(y, mu_gamma)
         return {"llf": llf, "xwx": xwx, "xwz": xwz}
 
     @staticmethod
@@ -170,6 +172,7 @@ class ComputationHelper:
             # Fisher information (negative expected Hessian)
             w = (dmu_deta**2) / var
             fisher_info = np.sum(w)
+            fisher_info = np.clip(fisher_info, 1e-10, None)
 
             step = grad / fisher_info
             gamma = gamma + step
@@ -349,7 +352,7 @@ class CategoricalComputationUnit(ComputationUnit):
         if X is None:
             eta = np.zeros_like(y)
             mu = np.clip(
-                softmax(np.column_stack([np.zeros(y.shape[0]), eta]), axis=1),
+                softmax(np.column_stack([np.zeros(y.shape[0]), eta + gamma]), axis=1),
                 1e-8,
                 1 - 1e-8,
             )  # N x J
@@ -365,7 +368,7 @@ class CategoricalComputationUnit(ComputationUnit):
             return {"llf": llf, "xwx": xwx, "xwz": xwz}
 
         # Compute eta and mu
-        eta = np.clip(X @ beta + gamma, -350, 350)  # N x (J-1)
+        eta = np.clip(X @ beta, -350, 350)  # N x (J-1)
         mu = np.clip(
             softmax(np.column_stack([np.zeros(y.shape[0]), eta]), axis=1),
             1e-8,
@@ -390,7 +393,7 @@ class CategoricalComputationUnit(ComputationUnit):
             except np.linalg.LinAlgError:
                 var_i_inv = np.linalg.pinv(var_i)
 
-            z_i = eta[i] + var_i_inv @ (y_i - p_i)  # (J-1)
+            z_i = (eta[i] - gamma[i]) + var_i_inv @ (y_i - p_i)  # (J-1)
 
             # Compute local contributions to XWX and XWz
             Xi = np.kron(np.eye(num_categories - 1), X[i : i + 1])  # (J-1) x (J-1)*K
@@ -406,6 +409,20 @@ class CategoricalComputationUnit(ComputationUnit):
 
 
 class OrdinalComputationUnit(ComputationUnit):
+    @staticmethod
+    def fix_sign(mus_diff):
+        # fix negative probs
+        sign_fix = np.column_stack(mus_diff)
+        problematic_indices = np.where(sign_fix < 0)[0]
+        if len(problematic_indices) > 0:
+            problem_probs = np.abs(sign_fix[problematic_indices])
+            row_sums = np.clip(np.sum(problem_probs, axis=1, keepdims=True), 1e-8, None)
+            normalized_probs = problem_probs / row_sums
+            sign_fix[problematic_indices] = normalized_probs
+            mus_diff = [sign_fix[:, i] for i in range(len(mus_diff))]
+        mus_diff = [np.clip(p, 1e-8, None) for p in mus_diff]
+        return mus_diff
+
     @staticmethod
     def compute(
         data: pl.DataFrame,
@@ -424,37 +441,61 @@ class OrdinalComputationUnit(ComputationUnit):
         y, X = get_data(data, response, predictors)
 
         if X is None:
-            raise Exception("blah")
+            raise NotImplementedError(
+                "Ordinal variables without intercept are not supported as of this moment"
+            )
 
         num_levels = len(response_dummy_columns)  # J
         num_features = len(predictors)  # K
 
-        # empty init
-        xwx = np.zeros((len(beta), len(beta)))
-        xwz = np.zeros((len(beta), 1))
+        if X is not None:
+            # empty init
+            xwx = np.zeros((len(beta), len(beta)))
+            xwz = np.zeros((len(beta), 1))
 
-        # Reshape beta (K x (J-1))
-        beta = beta.reshape(num_features, num_levels - 1, order="F")  # -1 for ref
+            # Reshape beta (K x (J-1))
+            beta = beta.reshape(num_features, num_levels - 1, order="F")  # -1 for ref
 
-        mus = []
-        for i, (level, beta_i) in enumerate(zip(response_dummy_columns[:-1], beta.T)):
-            level_int = int(level.split(ordinal_separator)[-1])
-            level_y = (y.squeeze() <= level_int).astype(float)
+            mus = []
+            for i, (level, beta_i) in enumerate(
+                zip(response_dummy_columns[:-1], beta.T)
+            ):
+                level_int = int(level.split(ordinal_separator)[-1])
+                level_y = (y.squeeze() <= level_int).astype(float)
 
-            level_eta, level_mu = ComputationHelper.run_prediction(
-                y=level_y, X=X, beta=beta_i, family=Binomial
-            )
-            mus.append(level_mu)
+                level_eta, level_mu, level_gamma, level_mu_gamma = (
+                    ComputationHelper.run_prediction(
+                        y=level_y, X=X, beta=beta_i, family=Binomial
+                    )
+                )
+                mus.append(level_mu_gamma)
 
-            level_xwx, level_xwz = ComputationHelper.get_irls_step(
-                y=level_y, X=X, eta=level_eta, mu=level_mu, family=Binomial
-            )
+                level_xwx, level_xwz = ComputationHelper.get_irls_step(
+                    y=level_y,
+                    X=X,
+                    eta=level_eta,
+                    mu=level_mu,
+                    gamma=level_gamma,
+                    family=Binomial,
+                )
 
-            offset = i * num_features
-            xwx[offset : offset + num_features, offset : offset + num_features] = (
-                level_xwx
-            )
-            xwz[offset : offset + num_features, :] = level_xwz.reshape((-1, 1))
+                offset = i * num_features
+                xwx[offset : offset + num_features, offset : offset + num_features] = (
+                    level_xwx
+                )
+                xwz[offset : offset + num_features, :] = level_xwz.reshape((-1, 1))
+        else:
+            xwx = np.empty((0, 0))
+            xwz = np.empty((0, 0))
+            mus = []
+            for i, level in enumerate(response_dummy_columns[:-1]):
+                level_int = int(level.split(ordinal_separator)[-1])
+                level_y = (y.squeeze() <= level_int).astype(float)
+
+                level_eta, level_mu, level_gamma, level_mu_gamma = (
+                    ComputationHelper.run_const_model(y=level_y, family=Binomial)
+                )
+                mus.append(level_mu_gamma)
 
         mus_diff = [mus[0]]  # P(Y=0)
         mus_diff.extend(
@@ -464,16 +505,7 @@ class OrdinalComputationUnit(ComputationUnit):
             1 - mus[-1]
         )  # P(Y=K) = 1-P(Y<=K-1) # TODO: ref class is last in this setup -check again
 
-        # fix negative probs
-        sign_fix = np.column_stack(mus_diff)
-        problematic_indices = np.where(sign_fix < 0)[0]
-        if len(problematic_indices) > 0:
-            problem_probs = np.abs(sign_fix[problematic_indices])
-            row_sums = np.clip(np.sum(problem_probs, axis=1, keepdims=True), 1e-8, None)
-            normalized_probs = problem_probs / row_sums
-            sign_fix[problematic_indices] = normalized_probs
-            mus_diff = [sign_fix[:, i] for i in range(len(mus_diff))]
-        mus_diff = [np.clip(p, 1e-8, None) for p in mus_diff]
+        mus_diff = OrdinalComputationUnit.fix_sign(mus_diff)
 
         llf = 0
         reference_level_indices = np.ones(len(data))
@@ -756,7 +788,6 @@ class Client:
             results[test_key] = BetaUpdateData(
                 llf=result["llf"], xwx=result["xwx"], xwz=result["xwz"]
             )
-
         # TODO: maybe just exchange difference of LLF of full and nested models
         return results
 
