@@ -4,19 +4,21 @@ import numpy as np
 import scipy
 
 from .env import DEBUG, FIT_INTERCEPT, RIDGE
-from .utils import BetaUpdateData
+from .utils import BetaUpdateData, VariableType
 
 
 class RegressionTest:
     def __init__(
         self,
         response: str,
+        response_type: VariableType,
         predictors: List[str],
         params: Tuple[int, int],
         convergence_threshold: float = 1e-3,
         max_iterations: int = 25,
     ):
         self.response: str = response
+        self.response_type: VariableType = response_type
         self.predictors: Set[str] = set(predictors)
 
         self.num_classes, self.num_parameters = params
@@ -67,9 +69,17 @@ class RegressionTest:
     def update_parameters(self, update: List[BetaUpdateData]):
         if self.is_finished():
             return
+
         llf = sum([_update.llf for _update in update])
         xwx = sum([_update.xwx for _update in update])
         xwz = sum([_update.xwz for _update in update])
+        n = int(sum([_update.n for _update in update]))
+        if self.response_type == VariableType.CONTINUOS and n > 0:
+            rss = sum([_update.rss for _update in update])
+            # print(self.response, self.response_type, llf, xwx)
+            # print(n)
+            sigma2 = np.clip(rss / n, 1e-10, None)
+            llf = -0.5 * n * np.log(2 * np.pi * sigma2) - 0.5 * n
 
         if RIDGE > 0:
             k = xwx.shape[0]
@@ -382,6 +392,7 @@ class TestEngine:
 
         test_x_restricted = RegressionTest(
             response=x,
+            response_type=self.schema[x],
             predictors=s,
             params=x_s_params,
             convergence_threshold=self.convergence_threshold,
@@ -389,6 +400,7 @@ class TestEngine:
         )
         test_x_unrestricted = RegressionTest(
             response=x,
+            response_type=self.schema[x],
             predictors=s + [y],
             params=x_sy_params,
             convergence_threshold=self.convergence_threshold,
@@ -396,6 +408,7 @@ class TestEngine:
         )
         test_y_restricted = RegressionTest(
             response=y,
+            response_type=self.schema[y],
             predictors=s,
             params=y_s_params,
             convergence_threshold=self.convergence_threshold,
@@ -403,6 +416,7 @@ class TestEngine:
         )
         test_y_unrestricted = RegressionTest(
             response=y,
+            response_type=self.schema[y],
             predictors=s + [x],
             params=y_sx_params,
             convergence_threshold=self.convergence_threshold,

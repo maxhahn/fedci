@@ -60,7 +60,8 @@ class Gaussian(DistributionalFamily):
         resid = y - mu
         n = y.shape[0]
         sigma2 = np.mean(resid**2)
-        ll = -0.5 * n * np.log(2 * np.pi * sigma2) - 0.5 * np.sum(resid**2) / sigma2
+        sigma2 = np.clip(sigma2, 1e-10, None)
+        ll = -0.5 * n * np.log(2 * np.pi * sigma2) - 0.5 * n
         return ll
 
 
@@ -105,7 +106,18 @@ class ComputationHelper:
         xwx = np.empty((0, 0))
         xwz = np.empty((0, 0))
 
-        return {"llf": llf, "xwx": xwx, "xwz": xwz}
+        # only use non-dummy values in rss and n for gaussian regression
+        result = {
+            "llf": llf,
+            "xwx": xwx,
+            "xwz": xwz,
+            "rss": 0,
+            "n": 0,
+        }
+        if family == Gaussian:
+            result["rss"] = np.sum((y - mu) ** 2).item()
+            result["n"] = y.shape[0]
+        return result
 
     @staticmethod
     def run_prediction(
@@ -115,12 +127,14 @@ class ComputationHelper:
         family: DistributionalFamily,
     ):
         eta: np.ndarray = X @ beta
-        mu: np.ndarray = family.inverse_link(eta)
+
         if CLIENT_HETEROGENIETY:
             gamma = ComputationHelper.fit_local_gamma(y=y, offset=eta, family=family)
         else:
             gamma = np.zeros_like(eta)
-        return eta, mu, gamma, family.inverse_link(eta + gamma)
+        eta += gamma
+        mu: np.ndarray = family.inverse_link(eta)
+        return eta, mu, gamma
 
     @staticmethod
     def get_irls_step(
@@ -138,6 +152,7 @@ class ComputationHelper:
 
         W = np.diag(((dmu_deta**2) / var_y).reshape(-1))
         z: np.ndarray = (eta - gamma) + (y - mu) / dmu_deta
+        # z: np.ndarray = eta + (y - mu) / dmu_deta
 
         xw = X.T @ W
         xwx = xw @ X
@@ -151,13 +166,18 @@ class ComputationHelper:
         beta: np.ndarray,
         family: DistributionalFamily,
     ):
-        eta, mu, gamma, mu_gamma = ComputationHelper.run_prediction(y, X, beta, family)
+        eta, mu, gamma = ComputationHelper.run_prediction(y, X, beta, family)
         xwx, xwz = ComputationHelper.get_irls_step(y, X, eta, mu, gamma, family)
-        llf: float = family.loglik(y, mu_gamma)
-        return {"llf": llf, "xwx": xwx, "xwz": xwz}
+        llf: float = family.loglik(y, mu)
+        # only use non-dummy values in rss and n for gaussian regression
+        result = {"llf": llf, "xwx": xwx, "xwz": xwz, "rss": 0, "n": 0}
+        if family == Gaussian:
+            result["rss"] = np.sum((y - mu) ** 2).item()
+            result["n"] = y.shape[0]
+        return result
 
     @staticmethod
-    def fit_local_gamma(y, offset, family, max_iter=20, tol=1e-8):
+    def fit_local_gamma(y, offset, family, max_iter=5, tol=1e-8):
         gamma = 0.0
         for _ in range(max_iter):
             eta = gamma + offset
@@ -183,7 +203,7 @@ class ComputationHelper:
         return gamma
 
     @staticmethod
-    def fit_multinomial_gamma(y, offset, max_iter=20, tol=1e-8):
+    def fit_multinomial_gamma(y, offset, max_iter=5, tol=1e-8):
         eta_base = offset
         n, K_minus_1 = y.shape
         K = K_minus_1 + 1
@@ -365,12 +385,12 @@ class CategoricalComputationUnit(ComputationUnit):
             xwx = np.empty((0, 0))
             xwz = np.empty((0, 0))
 
-            return {"llf": llf, "xwx": xwx, "xwz": xwz}
+            return {"llf": llf, "xwx": xwx, "xwz": xwz, "rss": 0, "n": 0}
 
         # Compute eta and mu
         eta = np.clip(X @ beta, -350, 350)  # N x (J-1)
         mu = np.clip(
-            softmax(np.column_stack([np.zeros(y.shape[0]), eta]), axis=1),
+            softmax(np.column_stack([np.zeros(y.shape[0]), eta + gamma]), axis=1),
             1e-8,
             1 - 1e-8,
         )  # N x J
@@ -393,7 +413,9 @@ class CategoricalComputationUnit(ComputationUnit):
             except np.linalg.LinAlgError:
                 var_i_inv = np.linalg.pinv(var_i)
 
-            z_i = (eta[i] - gamma[i]) + var_i_inv @ (y_i - p_i)  # (J-1)
+            # z_i = (eta[i] - gamma[i]) + var_i_inv @ (y_i - p_i)  # (J-1)
+            # because gamma is only added to mu and not to eta, gamma does not need to be subtracted from eta here
+            z_i = (eta[i]) + var_i_inv @ (y_i - p_i)  # (J-1)
 
             # Compute local contributions to XWX and XWz
             Xi = np.kron(np.eye(num_categories - 1), X[i : i + 1])  # (J-1) x (J-1)*K
@@ -405,7 +427,8 @@ class CategoricalComputationUnit(ComputationUnit):
         logprob = np.log(np.clip(mu, 1e-8, 1))
         llf = np.sum(y_full * logprob)
 
-        return {"llf": llf, "xwx": XWX, "xwz": XWz.reshape(-1, 1)}
+        # only use non-dummy values in rss and n for gaussian regression
+        return {"llf": llf, "xwx": XWX, "xwz": XWz.reshape(-1, 1), "rss": 0, "n": 0}
 
 
 class OrdinalComputationUnit(ComputationUnit):
@@ -463,12 +486,10 @@ class OrdinalComputationUnit(ComputationUnit):
                 level_int = int(level.split(ordinal_separator)[-1])
                 level_y = (y.squeeze() <= level_int).astype(float)
 
-                level_eta, level_mu, level_gamma, level_mu_gamma = (
-                    ComputationHelper.run_prediction(
-                        y=level_y, X=X, beta=beta_i, family=Binomial
-                    )
+                level_eta, level_mu, level_gamma = ComputationHelper.run_prediction(
+                    y=level_y, X=X, beta=beta_i, family=Binomial
                 )
-                mus.append(level_mu_gamma)
+                mus.append(level_mu)
 
                 level_xwx, level_xwz = ComputationHelper.get_irls_step(
                     y=level_y,
@@ -521,7 +542,7 @@ class OrdinalComputationUnit(ComputationUnit):
         mu_diff = mus_diff[-1]
         llf += np.sum(np.log(np.take(mu_diff, reference_level_indices.nonzero()[0])))
 
-        result = {"llf": llf, "xwx": xwx, "xwz": xwz}
+        result = {"llf": llf, "xwx": xwx, "xwz": xwz, "rss": 0, "n": 0}
         return result
 
 
@@ -665,11 +686,15 @@ class Client:
                 llf_mask = np.random.uniform(-1e8, 1e8, 1).item()
                 xwx_mask = np.random.uniform(-1e8, 1e8, (len(beta), len(beta)))
                 xwz_mask = np.random.uniform(-1e8, 1e8, (len(beta), 1))
+                rss_mask = np.random.uniform(-1e8, 1e8, 1).item()
+                n_mask = np.random.uniform(-1e8, 1e8, 1).item()
 
                 self.send_masks[test_key][client_id] = {
                     "llf": llf_mask,
                     "xwx": xwx_mask,
                     "xwz": xwz_mask,
+                    "rss": rss_mask,
+                    "n": n_mask,
                 }
                 client.add_mask(
                     self.id,
@@ -677,9 +702,13 @@ class Client:
                     llf_mask=llf_mask,
                     xwx_mask=xwx_mask,
                     xwz_mask=xwz_mask,
+                    rss_mask=rss_mask,
+                    n_mask=n_mask,
                 )
 
-    def add_mask(self, sender_id, test_key, llf_mask, xwx_mask, xwz_mask):
+    def add_mask(
+        self, sender_id, test_key, llf_mask, xwx_mask, xwz_mask, rss_mask, n_mask
+    ):
         xwx_mask = self._network_fetch_function(xwx_mask)
         xwz_mask = self._network_fetch_function(xwz_mask)
         assert sender_id in self.contributing_clients, "Unknown sender"
@@ -689,6 +718,8 @@ class Client:
             "llf": llf_mask,
             "xwx": xwx_mask,
             "xwz": xwz_mask,
+            "rss": rss_mask,
+            "n": n_mask,
         }
 
     def combine_masks(self, betas):
@@ -710,6 +741,8 @@ class Client:
             llf_masks = []
             xwx_masks = []
             xwz_masks = []
+            rss_masks = []
+            n_masks = []
             for sender_id, masks1 in self.received_masks[test_key].items():
                 assert sender_id in self.send_masks[test_key], (
                     "Received a mask from a client no mask has been sent to"
@@ -719,11 +752,15 @@ class Client:
                 llf_masks.append(masks1["llf"] - masks2["llf"])
                 xwx_masks.append(masks1["xwx"] - masks2["xwx"])
                 xwz_masks.append(masks1["xwz"] - masks2["xwz"])
+                rss_masks.append(masks1["rss"] - masks2["rss"])
+                n_masks.append(masks1["n"] - masks2["n"])
 
             self.response_masking[test_key] = {
                 "llf": sum(llf_masks),
                 "xwx": sum(xwx_masks),
                 "xwz": sum(xwz_masks),
+                "rss": sum(rss_masks),
+                "n": sum(n_masks),
             }
             del self.received_masks[test_key]
             del self.send_masks[test_key]
@@ -734,6 +771,8 @@ class Client:
         irls_step_result["llf"] += self.response_masking[test_key]["llf"]
         irls_step_result["xwx"] += self.response_masking[test_key]["xwx"]
         irls_step_result["xwz"] += self.response_masking[test_key]["xwz"]
+        irls_step_result["rss"] += self.response_masking[test_key]["rss"]
+        irls_step_result["n"] += self.response_masking[test_key]["n"]
         return irls_step_result
 
     def compute(
@@ -756,6 +795,8 @@ class Client:
                         "llf": 0,
                         "xwx": np.zeros((len(beta), len(beta))),
                         "xwz": np.zeros((len(beta), 1)),
+                        "rss": 0,
+                        "n": 0,
                     },
                 )
             return result
@@ -781,13 +822,10 @@ class Client:
             result = regression_computation_map[self.schema[resp_var]].compute(
                 self.expanded_data, resp_var, cond_vars, beta
             )
-
             if len(self.contributing_clients) > 0:
                 result = self.apply_masks(test_key, result)
 
-            results[test_key] = BetaUpdateData(
-                llf=result["llf"], xwx=result["xwx"], xwz=result["xwz"]
-            )
+            results[test_key] = BetaUpdateData(**result)
         # TODO: maybe just exchange difference of LLF of full and nested models
         return results
 

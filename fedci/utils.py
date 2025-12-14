@@ -40,6 +40,8 @@ class BetaUpdateData:
     llf: float
     xwx: np.ndarray
     xwz: np.ndarray
+    rss: float
+    n: int
 
 
 @dataclass
