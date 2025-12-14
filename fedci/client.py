@@ -203,7 +203,7 @@ class ComputationHelper:
         return gamma
 
     @staticmethod
-    def fit_multinomial_gamma(y, offset, max_iter=5, tol=1e-8):
+    def fit_multinomial_gamma(y, offset, max_iter=15, tol=1e-8):
         eta_base = offset
         n, K_minus_1 = y.shape
         K = K_minus_1 + 1
@@ -212,24 +212,29 @@ class ComputationHelper:
 
         for iteration in range(max_iter):
             # eta including gamma, add reference category (0 column)
-            eta = np.column_stack([eta_base + gamma, np.zeros(n)])
+            # eta = np.column_stack([np.zeros(n), eta_base + gamma])
 
-            # Numerically stable softmax: subtract max from each row
-            eta_max = np.max(eta, axis=1, keepdims=True)
-            eta_stable = np.clip(eta - eta_max, -50, 50)
-            exp_eta = np.exp(eta_stable)
-            p = exp_eta / np.sum(exp_eta, axis=1, keepdims=True)
+            # # Numerically stable softmax: subtract max from each row
+            # eta_max = np.max(eta, axis=1, keepdims=True)
+            # eta_stable = np.clip(eta - eta_max, -50, 50)
+            # exp_eta = np.exp(eta_stable)
+            # p = exp_eta / np.sum(exp_eta, axis=1, keepdims=True)
 
-            # Clip probabilities away from 0 and 1 for numerical stability
-            p = np.clip(p, 1e-10, 1 - 1e-10)
+            p = np.clip(
+                softmax(
+                    np.column_stack([np.zeros(y.shape[0]), eta_base + gamma]), axis=1
+                ),
+                1e-8,
+                1 - 1e-8,
+            )
             p = p / np.sum(p, axis=1, keepdims=True)  # Re-normalize
 
             # gradient: sum_i (Y_ik - p_ik)
-            grad = np.sum(y - p[:, :K_minus_1], axis=0)
+            grad = np.sum(y - p[:, 1:], axis=0)
 
             # Hessian: H[a,b] = - sum_i p_ia * (1[a=b] - p_ib)
             # Vectorized computation to avoid overflow
-            pi = p[:, :K_minus_1]  # shape (n, K_minus_1)
+            pi = p[:, 1:]  # shape (n, K_minus_1)
 
             # H = -sum_i [diag(pi) - pi @ pi.T]
             # More stable: compute directly
@@ -281,9 +286,11 @@ def get_data(
         data = data.with_columns(pl.lit(1).alias(constant_colname))
 
     if len(predictors) > 0:
-        X: np.ndarray = data.select(predictors).to_numpy().astype(float)
+        X: np.ndarray = data.select(sorted(predictors)).to_numpy().astype(float)
     else:
         X = None
+    if type(response) == list:
+        response = sorted(response)
     y: np.ndarray = data.select(response).to_numpy().astype(float)
     return (y, X)
 
@@ -376,11 +383,13 @@ class CategoricalComputationUnit(ComputationUnit):
                 1e-8,
                 1 - 1e-8,
             )  # N x J
-            mu = mu[:, 1:]
+            # renormalize
+            mu = mu / np.sum(mu, axis=1, keepdims=True)
+            # mu = mu[:, 1:]
 
             # y_full = data.to_pandas()[response_dummy_columns].to_numpy()  # N x J
             logprob = np.log(np.clip(mu, 1e-8, 1))
-            llf = np.sum(y * logprob)
+            llf = np.sum(y_full * logprob)
 
             xwx = np.empty((0, 0))
             xwz = np.empty((0, 0))
@@ -394,6 +403,8 @@ class CategoricalComputationUnit(ComputationUnit):
             1e-8,
             1 - 1e-8,
         )  # N x J
+        # renormalize
+        mu = mu / np.sum(mu, axis=1, keepdims=True)
         mu_reduced = mu[:, 1:]  # N x (J-1)
 
         # Initialize accumulators for XWX and XWz
