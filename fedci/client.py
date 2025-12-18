@@ -72,7 +72,7 @@ class Binomial(DistributionalFamily):
 
     @staticmethod
     def inverse_link(eta: np.ndarray) -> np.ndarray:
-        return 1 / (1 + np.exp(-eta))
+        return 1 / (1 + np.exp(-np.clip(eta, -350, 350)))
 
     @staticmethod
     def inverse_deriv(eta: np.ndarray) -> np.ndarray:
@@ -118,6 +118,21 @@ class ComputationHelper:
             result["rss"] = np.sum((y - mu) ** 2).item()
             result["n"] = y.shape[0]
         return result
+
+    @staticmethod
+    def run_const_predict(
+        y: np.ndarray,
+        family: DistributionalFamily,
+    ):
+        eta = np.zeros_like(y)
+        if CLIENT_HETEROGENIETY:
+            gamma = ComputationHelper.fit_local_gamma(y=y, offset=eta, family=family)
+            eta += gamma
+        else:
+            gamma = np.zeros_like(eta)
+        mu: np.ndarray = family.inverse_link(eta)
+
+        return eta, mu, gamma
 
     @staticmethod
     def run_prediction(
@@ -199,7 +214,6 @@ class ComputationHelper:
 
             if np.linalg.norm(step) < tol:
                 break
-
         return gamma
 
     @staticmethod
@@ -279,18 +293,15 @@ class ComputationHelper:
 def get_data(
     data: pl.DataFrame, response: str | List[str], predictors: List[str]
 ) -> Tuple[np.ndarray, np.ndarray]:
-    if FIT_INTERCEPT:
-        assert predictors[-1] == constant_colname, (
-            "Constant column is not last predictor"
-        )
-        data = data.with_columns(pl.lit(1).alias(constant_colname))
-
     if len(predictors) > 0:
-        X: np.ndarray = data.select(sorted(predictors)).to_numpy().astype(float)
+        if FIT_INTERCEPT:
+            assert predictors[-1] == constant_colname, (
+                "Constant column is not last predictor"
+            )
+            data = data.with_columns(pl.lit(1).alias(constant_colname))
+        X: np.ndarray = data.select(predictors).to_numpy().astype(float)
     else:
         X = None
-    if type(response) == list:
-        response = sorted(response)
     y: np.ndarray = data.select(response).to_numpy().astype(float)
     return (y, X)
 
@@ -355,6 +366,7 @@ class CategoricalComputationUnit(ComputationUnit):
             for c in data.columns
             if c.startswith(f"{response}{categorical_separator}")
         ]
+        response_dummy_columns = sorted(response_dummy_columns)
 
         y_full, X = get_data(data, response_dummy_columns, predictors)
         y = y_full[:, 1:]
@@ -471,13 +483,7 @@ class OrdinalComputationUnit(ComputationUnit):
         response_dummy_columns = sorted(
             response_dummy_columns, key=lambda x: int(x.split(ordinal_separator)[1])
         )
-
         y, X = get_data(data, response, predictors)
-
-        if X is None:
-            raise NotImplementedError(
-                "Ordinal variables without intercept are not supported as of this moment"
-            )
 
         num_levels = len(response_dummy_columns)  # J
         num_features = len(predictors)  # K
@@ -501,7 +507,6 @@ class OrdinalComputationUnit(ComputationUnit):
                     y=level_y, X=X, beta=beta_i, family=Binomial
                 )
                 mus.append(level_mu)
-
                 level_xwx, level_xwz = ComputationHelper.get_irls_step(
                     y=level_y,
                     X=X,
@@ -524,10 +529,10 @@ class OrdinalComputationUnit(ComputationUnit):
                 level_int = int(level.split(ordinal_separator)[-1])
                 level_y = (y.squeeze() <= level_int).astype(float)
 
-                level_eta, level_mu, level_gamma, level_mu_gamma = (
-                    ComputationHelper.run_const_model(y=level_y, family=Binomial)
+                _, level_mu, _ = ComputationHelper.run_const_predict(
+                    y=level_y, family=Binomial
                 )
-                mus.append(level_mu_gamma)
+                mus.append(level_mu)
 
         mus_diff = [mus[0]]  # P(Y=0)
         mus_diff.extend(
@@ -552,7 +557,6 @@ class OrdinalComputationUnit(ComputationUnit):
             llf += np.sum(np.log(np.take(mu_diff, current_level_indices.nonzero()[0])))
         mu_diff = mus_diff[-1]
         llf += np.sum(np.log(np.take(mu_diff, reference_level_indices.nonzero()[0])))
-
         result = {"llf": llf, "xwx": xwx, "xwz": xwz, "rss": 0, "n": 0}
         return result
 
@@ -608,8 +612,8 @@ class Client:
         self.expanded_data: Optional[pl.DataFrame] = None
 
         self.contributing_clients: Dict[str, Client] = {}
-        self.received_masks = {}
-        self.send_masks = {}
+        # self.received_masks = {}
+        # self.send_masks = {}
         self.response_masking = {}
 
     def get_id(self):
@@ -691,24 +695,40 @@ class Client:
         betas = self._network_fetch_function(betas)
         for client_id, client in self.contributing_clients.items():
             for test_key, beta in betas.items():
-                if test_key not in self.send_masks:
-                    self.send_masks[test_key] = {}
+                if test_key not in self.response_masking:
+                    self.response_masking[test_key] = {}
+                if client_id in self.response_masking[test_key]:
+                    continue
 
                 llf_mask = np.random.uniform(-1e8, 1e8, 1).item()
-                xwx_mask = np.random.uniform(-1e8, 1e8, (len(beta), len(beta)))
-                xwz_mask = np.random.uniform(-1e8, 1e8, (len(beta), 1))
-                rss_mask = np.random.uniform(-1e8, 1e8, 1).item()
-                n_mask = np.random.uniform(-1e8, 1e8, 1).item()
+                xwx_mask = np.random.uniform(-1e8, 1e8, (len(beta), len(beta))).astype(
+                    np.float128
+                )
+                xwz_mask = np.random.uniform(-1e8, 1e8, (len(beta), 1)).astype(
+                    np.float128
+                )
+                rss_mask = np.random.uniform(-1e8, 1e8, 1).astype(
+                    np.float128
+                )  # .item()
+                n_mask = np.random.uniform(-1e8, 1e8, 1).astype(np.float128)  # .item()
 
-                self.send_masks[test_key][client_id] = {
-                    "llf": llf_mask,
-                    "xwx": xwx_mask,
-                    "xwz": xwz_mask,
-                    "rss": rss_mask,
-                    "n": n_mask,
-                }
+                client_id_pair = (
+                    (self.id, client_id)
+                    if self.id < client_id
+                    else (client_id, self.id)
+                )
+
+                self.add_mask(
+                    client_id_pair,
+                    test_key,
+                    llf_mask=-llf_mask,
+                    xwx_mask=-xwx_mask,
+                    xwz_mask=-xwz_mask,
+                    rss_mask=-rss_mask,
+                    n_mask=-n_mask,
+                )
                 client.add_mask(
-                    self.id,
+                    client_id_pair,
                     test_key,
                     llf_mask=llf_mask,
                     xwx_mask=xwx_mask,
@@ -722,10 +742,9 @@ class Client:
     ):
         xwx_mask = self._network_fetch_function(xwx_mask)
         xwz_mask = self._network_fetch_function(xwz_mask)
-        assert sender_id in self.contributing_clients, "Unknown sender"
-        if test_key not in self.received_masks:
-            self.received_masks[test_key] = {}
-        self.received_masks[test_key][sender_id] = {
+        if test_key not in self.response_masking:
+            self.response_masking[test_key] = {}
+        self.response_masking[test_key][sender_id] = {
             "llf": llf_mask,
             "xwx": xwx_mask,
             "xwz": xwz_mask,
@@ -733,57 +752,66 @@ class Client:
             "n": n_mask,
         }
 
-    def combine_masks(self, betas):
-        betas = self._network_fetch_function(betas)
-        if len(self.contributing_clients) == 0:
-            return
-        for test_key in betas:
-            assert test_key in self.received_masks, (
-                "Client did not receive required mask"
-            )
-            assert test_key in self.send_masks, "Client did not send required mask"
-            assert len(self.received_masks[test_key]) == len(
-                self.send_masks[test_key]
-            ), "Number of send and received masks does not match"
+    # def combine_masks(self, betas):
+    #     betas = self._network_fetch_function(betas)
+    #     if len(self.contributing_clients) == 0:
+    #         return
+    #     for test_key in betas:
+    #         assert test_key in self.received_masks, (
+    #             "Client did not receive required mask"
+    #         )
+    #         assert test_key in self.send_masks, "Client did not send required mask"
+    #         assert len(self.received_masks[test_key]) == len(
+    #             self.send_masks[test_key]
+    #         ), "Number of send and received masks does not match"
 
-            if test_key not in self.response_masking:
-                self.response_masking[test_key] = {}
+    #         if test_key not in self.response_masking:
+    #             self.response_masking[test_key] = {}
 
-            llf_masks = []
-            xwx_masks = []
-            xwz_masks = []
-            rss_masks = []
-            n_masks = []
-            for sender_id, masks1 in self.received_masks[test_key].items():
-                assert sender_id in self.send_masks[test_key], (
-                    "Received a mask from a client no mask has been sent to"
-                )
+    #         llf_masks = []
+    #         xwx_masks = []
+    #         xwz_masks = []
+    #         rss_masks = []
+    #         n_masks = []
+    #         for sender_id, masks1 in self.received_masks[test_key].items():
+    #             assert sender_id in self.send_masks[test_key], (
+    #                 "Received a mask from a client no mask has been sent to"
+    #             )
 
-                masks2 = self.send_masks[test_key][sender_id]
-                llf_masks.append(masks1["llf"] - masks2["llf"])
-                xwx_masks.append(masks1["xwx"] - masks2["xwx"])
-                xwz_masks.append(masks1["xwz"] - masks2["xwz"])
-                rss_masks.append(masks1["rss"] - masks2["rss"])
-                n_masks.append(masks1["n"] - masks2["n"])
+    #             masks2 = self.send_masks[test_key][sender_id]
+    #             llf_masks.append(masks1["llf"] - masks2["llf"])
+    #             xwx_masks.append(masks1["xwx"] - masks2["xwx"])
+    #             xwz_masks.append(masks1["xwz"] - masks2["xwz"])
+    #             rss_masks.append(masks1["rss"] - masks2["rss"])
+    #             n_masks.append(masks1["n"] - masks2["n"])
 
-            self.response_masking[test_key] = {
-                "llf": sum(llf_masks),
-                "xwx": sum(xwx_masks),
-                "xwz": sum(xwz_masks),
-                "rss": sum(rss_masks),
-                "n": sum(n_masks),
-            }
-            del self.received_masks[test_key]
-            del self.send_masks[test_key]
+    #         self.response_masking[test_key] = {
+    #             "llf": sum(llf_masks),
+    #             "xwx": sum(xwx_masks),
+    #             "xwz": sum(xwz_masks),
+    #             "rss": sum(rss_masks),
+    #             "n": sum(n_masks),
+    #         }
+    #         del self.received_masks[test_key]
+    #         del self.send_masks[test_key]
 
     def apply_masks(self, test_key, irls_step_result):
         if not ADDITIVE_MASKING:
             return irls_step_result
-        irls_step_result["llf"] += self.response_masking[test_key]["llf"]
-        irls_step_result["xwx"] += self.response_masking[test_key]["xwx"]
-        irls_step_result["xwz"] += self.response_masking[test_key]["xwz"]
-        irls_step_result["rss"] += self.response_masking[test_key]["rss"]
-        irls_step_result["n"] += self.response_masking[test_key]["n"]
+        assert (
+            len(self.response_masking[test_key])
+            == len(self.contributing_clients)  # you dont have a mask with yourself
+        )
+        llf_mask = sum(mask["llf"] for mask in self.response_masking[test_key].values())
+        xwx_mask = sum(mask["xwx"] for mask in self.response_masking[test_key].values())
+        xwz_mask = sum(mask["xwz"] for mask in self.response_masking[test_key].values())
+        rss_mask = sum(mask["rss"] for mask in self.response_masking[test_key].values())
+        n_mask = sum(mask["n"] for mask in self.response_masking[test_key].values())
+        irls_step_result["llf"] += llf_mask  # self.response_masking[test_key]["llf"]
+        irls_step_result["xwx"] += xwx_mask  # self.response_masking[test_key]["xwx"]
+        irls_step_result["xwz"] += xwz_mask  # self.response_masking[test_key]["xwz"]
+        irls_step_result["rss"] += rss_mask  # self.response_masking[test_key]["rss"]
+        irls_step_result["n"] += n_mask  # self.response_masking[test_key]["n"]
         return irls_step_result
 
     def compute(
@@ -826,10 +854,10 @@ class Client:
                     new_cond_vars.extend(self.global_ordinal_expressions[cond_var][:-1])
                 else:
                     new_cond_vars.append(cond_var)
+            new_cond_vars = sorted(new_cond_vars)
             if FIT_INTERCEPT:
                 new_cond_vars.append(constant_colname)
             cond_vars = new_cond_vars
-
             result = regression_computation_map[self.schema[resp_var]].compute(
                 self.expanded_data, resp_var, cond_vars, beta
             )

@@ -10,7 +10,7 @@ from fedci.utils import (
 )
 
 from .client import Client
-from .env import ADDITIVE_MASKING, DEBUG
+from .env import ADDITIVE_MASKING, DEBUG, FIT_INTERCEPT
 from .testing import TestEngine
 from .utils import BetaUpdateData
 
@@ -21,7 +21,7 @@ class Server:
         clients: List[Client],
         schema: Optional[InitialSchema] = None,
         max_regressors: Optional[int] = None,
-        convergence_threshold: Optional[float] = 1e-3,
+        convergence_threshold: Optional[float] = 1e-6,
         max_iterations: Optional[int] = 25,
         _network_fetch_function=lambda x: x,
     ):
@@ -124,8 +124,8 @@ class Server:
             if ADDITIVE_MASKING:
                 for client in clients:
                     client.exchange_masks(betas)
-                for client in clients:
-                    client.combine_masks(betas)
+                # for client in clients:
+                #    client.combine_masks(betas)
             updates = []
             for client in clients:
                 update = client.compute(betas)
@@ -140,9 +140,11 @@ class Server:
         if DEBUG > 0:
             print("*** Final betas")
             for key, beta in self.test_engine.test.get_betas().items():
-                print(
-                    f"{key[0]} ~ {','.join(sorted(list(key[1])) + ['1'])} after {key[2]} iterations"
-                )
+                cond_set = sorted(list(key[1]))
+                if FIT_INTERCEPT:
+                    cond_set.append("1")
+
+                print(f"{key[0]} ~ {','.join(cond_set)} after {key[2]} iterations")
                 for _beta in beta.tolist():
                     print(_beta)
         result = self.test_engine.get_result()

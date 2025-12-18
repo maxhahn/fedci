@@ -43,7 +43,9 @@ class RegressionTest:
             self.iterations,
         )
         predictors = sorted(list(predictors))
-        return f"RegressionTest {response} ~ {', '.join(predictors + ['1'])} - iteration {iteration}/{self.max_iterations}{' - not finished' if not self.is_finished() else ''}"
+        if FIT_INTERCEPT:
+            predictors.append("1")
+        return f"RegressionTest {response} ~ {', '.join(predictors)} - iteration {iteration}/{self.max_iterations}{' - not finished' if not self.is_finished() else ''}"
 
     def get_change_in_llf(self):
         if self.previous_llf is None:
@@ -76,18 +78,17 @@ class RegressionTest:
         n = int(sum([_update.n for _update in update]))
         if self.response_type == VariableType.CONTINUOS and n > 0:
             rss = sum([_update.rss for _update in update])
-            # print(self.response, self.response_type, llf, xwx)
-            # print(n)
             sigma2 = np.clip(rss / n, 1e-10, None)
             llf = -0.5 * n * np.log(2 * np.pi * sigma2) - 0.5 * n
+            llf = llf.astype(np.float64).item()  # uses np.float128 for higher precision
 
         if RIDGE > 0:
             k = xwx.shape[0]
-            if FIT_INTERCEPT:
-                penalty_matrix = np.zeros((k, k))
-                penalty_matrix[:-1, :-1] = RIDGE * np.eye(k - 1)
-            else:
-                penalty_matrix = RIDGE * np.eye(k)
+            # if FIT_INTERCEPT:
+            #     penalty_matrix = np.zeros((k, k))
+            #     penalty_matrix[:-1, :-1] = RIDGE * np.eye(k - 1)
+            # else:
+            penalty_matrix = RIDGE * np.eye(k)
             xwx += penalty_matrix
 
         try:
@@ -191,16 +192,14 @@ class LikelihoodRatioTest:
 
     def get_test_parameters(self):
         test_parameters = {}
-        if not self.restricted_test.is_finished():
-            response, predictors, iteration, beta, _, _ = (
-                self.restricted_test.get_test_parameters()
-            )
-            test_parameters[(response, predictors, iteration)] = beta
-        if not self.unrestricted_test.is_finished():
-            response, predictors, iteration, beta, _, _ = (
-                self.unrestricted_test.get_test_parameters()
-            )
-            test_parameters[(response, predictors, iteration)] = beta
+        response, predictors, iteration, beta, _, _ = (
+            self.restricted_test.get_test_parameters()
+        )
+        test_parameters[(response, predictors, iteration)] = beta
+        response, predictors, iteration, beta, _, _ = (
+            self.unrestricted_test.get_test_parameters()
+        )
+        test_parameters[(response, predictors, iteration)] = beta
         return test_parameters
 
     def get_betas(self):
