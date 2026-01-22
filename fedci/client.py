@@ -1,16 +1,19 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import polars as pl
 import rpyc
+import statsmodels.api as sm
+import statsmodels.genmod.families.family as fam
 from scipy.special import softmax
 
-from .env import ADDITIVE_MASKING, CLIENT_HETEROGENIETY, FIT_INTERCEPT
+from .env import get_env_additive_masking, get_env_client_heterogeniety, get_env_fit_intercept
 from .utils import (
     BetaUpdateData,
     VariableType,
     categorical_separator,
     constant_colname,
+    client_colname,
     ordinal_separator,
     polars_dtype_map,
 )
@@ -96,9 +99,9 @@ class ComputationHelper:
         family: DistributionalFamily,
     ):
         eta = np.zeros_like(y)
-        if CLIENT_HETEROGENIETY:
-            gamma = ComputationHelper.fit_local_gamma(y=y, offset=eta, family=family)
-            eta += gamma
+        if get_env_client_heterogeniety()==1:
+            alpha = ComputationHelper.fit_local_alpha(y=y, offset=eta, family=family)
+            eta += alpha
         mu: np.ndarray = family.inverse_link(eta)
 
         llf: float = family.loglik(y, mu)
@@ -125,14 +128,14 @@ class ComputationHelper:
         family: DistributionalFamily,
     ):
         eta = np.zeros_like(y)
-        if CLIENT_HETEROGENIETY:
-            gamma = ComputationHelper.fit_local_gamma(y=y, offset=eta, family=family)
-            eta += gamma
+        if get_env_client_heterogeniety()==1:
+            alpha = ComputationHelper.fit_local_alpha(y=y, offset=eta, family=family)
+            eta += alpha
         else:
-            gamma = np.zeros_like(eta)
+            alpha = np.zeros_like(eta)
         mu: np.ndarray = family.inverse_link(eta)
 
-        return eta, mu, gamma
+        return eta, mu, alpha
 
     @staticmethod
     def run_prediction(
@@ -143,13 +146,13 @@ class ComputationHelper:
     ):
         eta: np.ndarray = X @ beta
 
-        if CLIENT_HETEROGENIETY:
-            gamma = ComputationHelper.fit_local_gamma(y=y, offset=eta, family=family)
+        if get_env_client_heterogeniety()==1:
+            alpha = ComputationHelper.fit_local_alpha(y=y, offset=eta, family=family)
         else:
-            gamma = np.zeros_like(eta)
-        eta += gamma
+            alpha = np.zeros_like(eta)
+        eta += alpha
         mu: np.ndarray = family.inverse_link(eta)
-        return eta, mu, gamma
+        return eta, mu, alpha
 
     @staticmethod
     def get_irls_step(
@@ -157,7 +160,7 @@ class ComputationHelper:
         X: np.ndarray,
         eta: np.ndarray,
         mu: np.ndarray,
-        gamma,
+        alpha,
         family: DistributionalFamily,
     ):
         dmu_deta: np.ndarray = family.inverse_deriv(eta)
@@ -166,7 +169,7 @@ class ComputationHelper:
         var_y = np.clip(var_y, 1e-10, None)
 
         W = np.diag(((dmu_deta**2) / var_y).reshape(-1))
-        z: np.ndarray = (eta - gamma) + (y - mu) / dmu_deta
+        z: np.ndarray = (eta - alpha) + (y - mu) / dmu_deta
         # z: np.ndarray = eta + (y - mu) / dmu_deta
 
         xw = X.T @ W
@@ -181,8 +184,8 @@ class ComputationHelper:
         beta: np.ndarray,
         family: DistributionalFamily,
     ):
-        eta, mu, gamma = ComputationHelper.run_prediction(y, X, beta, family)
-        xwx, xwz = ComputationHelper.get_irls_step(y, X, eta, mu, gamma, family)
+        eta, mu, alpha = ComputationHelper.run_prediction(y, X, beta, family)
+        xwx, xwz = ComputationHelper.get_irls_step(y, X, eta, mu, alpha, family)
         llf: float = family.loglik(y, mu)
         # only use non-dummy values in rss and n for gaussian regression
         result = {"llf": llf, "xwx": xwx, "xwz": xwz, "rss": 0, "n": 0}
@@ -192,109 +195,85 @@ class ComputationHelper:
         return result
 
     @staticmethod
-    def fit_local_gamma(y, offset, family, max_iter=5, tol=1e-8):
-        gamma = 0.0
-        for _ in range(max_iter):
-            eta = gamma + offset
-            mu = family.inverse_link(eta)
-            dmu_deta = family.inverse_deriv(eta)
-            var = family.variance(mu)
-            var = np.clip(var, 1e-10, None)
+    def fit_local_alpha(y, offset, family, max_iter=100, tol=1e-8):
+        n = len(y)
+        X = np.ones((n, 1))
 
-            # Score (first derivative)
-            grad = np.sum((y - mu) * dmu_deta / var)
+        smfamily = fam.Gaussian() if family == Gaussian else fam.Binomial()
+        model = sm.GLM(y.reshape(-1), X, family=smfamily, offset=offset.reshape(-1))
+        res = model.fit(maxiter=max_iter, tol=tol, disp=False)
 
-            # Fisher information (negative expected Hessian)
-            w = (dmu_deta**2) / var
-            fisher_info = np.sum(w)
-            fisher_info = np.clip(fisher_info, 1e-10, None)
-
-            step = grad / fisher_info
-            gamma = gamma + step
-
-            if np.linalg.norm(step) < tol:
-                break
-        return gamma
+        alpha = float(res.params[0])
+        return alpha
 
     @staticmethod
-    def fit_multinomial_gamma(y, offset, max_iter=15, tol=1e-8):
-        eta_base = offset
-        n, K_minus_1 = y.shape
-        K = K_minus_1 + 1
-        # initialize gamma
-        gamma = np.zeros(K_minus_1)
+    def fit_multinomial_alpha(y_obs, offset, max_iter=10, tol=1e-6):
+        N, K_minus_1 = y_obs.shape
+        alpha = np.zeros(K_minus_1)
 
-        for iteration in range(max_iter):
-            # eta including gamma, add reference category (0 column)
-            # eta = np.column_stack([np.zeros(n), eta_base + gamma])
+        counts = y_obs.sum(axis=0)
+        present = counts > 0
 
-            # # Numerically stable softmax: subtract max from each row
-            # eta_max = np.max(eta, axis=1, keepdims=True)
-            # eta_stable = np.clip(eta - eta_max, -50, 50)
-            # exp_eta = np.exp(eta_stable)
-            # p = exp_eta / np.sum(exp_eta, axis=1, keepdims=True)
+        if not np.any(present):
+            return alpha
 
-            p = np.clip(
-                softmax(
-                    np.column_stack([np.zeros(y.shape[0]), eta_base + gamma]), axis=1
-                ),
-                1e-8,
-                1 - 1e-8,
+        NEG_INF = -float("inf")  # -3000.0
+        alpha[~present] = NEG_INF
+
+        idx = np.where(present)[0]
+        y_obs_p = y_obs[:, idx]
+        offset_p = offset[:, idx]
+        alpha_p = alpha[idx]
+
+        for _ in range(max_iter):
+            eta_p = offset_p + alpha_p
+            eta_full = np.hstack(
+                [
+                    np.zeros((N, 1)),  # reference category
+                    eta_p,
+                ]
             )
-            p = p / np.sum(p, axis=1, keepdims=True)  # Re-normalize
 
-            # gradient: sum_i (Y_ik - p_ik)
-            grad = np.sum(y - p[:, 1:], axis=0)
+            exp_eta = np.exp(eta_full - np.max(eta_full, axis=1, keepdims=True))
+            pi_full = exp_eta / np.sum(exp_eta, axis=1, keepdims=True)
+            pi_p = pi_full[:, 1:][:, : len(idx)]
 
-            # Hessian: H[a,b] = - sum_i p_ia * (1[a=b] - p_ib)
-            # Vectorized computation to avoid overflow
-            pi = p[:, 1:]  # shape (n, K_minus_1)
+            score = np.sum(y_obs_p - pi_p, axis=0)
 
-            # H = -sum_i [diag(pi) - pi @ pi.T]
-            # More stable: compute directly
-            H = np.zeros((K_minus_1, K_minus_1))
-            for i in range(n):
-                pi_i = pi[i, :]
-                # Diagonal elements: -p_a * (1 - p_a)
-                # Off-diagonal: -p_a * (0 - p_b) = p_a * p_b
-                H -= np.diag(pi_i) - np.outer(pi_i, pi_i)
+            Kp = len(idx)
+            hessian = np.zeros((Kp, Kp))
 
-            # Add regularization to prevent singular matrix
-            H_reg = H - np.eye(K_minus_1) * 1e-6
+            for k in range(Kp):
+                hessian[k, k] = np.sum(pi_p[:, k] * (1 - pi_p[:, k]))
 
-            # Check if H is reasonable
-            if not np.all(np.isfinite(H_reg)):
-                # Hessian has overflow/underflow, stop iteration
-                break
+            for k in range(Kp):
+                for j in range(k + 1, Kp):
+                    val = -np.sum(pi_p[:, k] * pi_p[:, j])
+                    hessian[k, j] = val
+                    hessian[j, k] = val
 
-            # Newton step with safer inversion
+            # Small ridge for numerical stability
+            hessian += 10 * np.eye(Kp)
+
             try:
-                # Try Cholesky decomposition first (if H is negative definite as expected)
-                step = np.linalg.solve(-H_reg, grad)
+                step = np.linalg.solve(hessian, score)
             except np.linalg.LinAlgError:
-                # Fall back to pseudo-inverse with safer computation
-                U, s, Vt = np.linalg.svd(H_reg, full_matrices=False)
-                # Only use singular values above threshold
-                s_inv = np.where(np.abs(s) > 1e-10, 1.0 / s, 0)
-                H_inv = Vt.T @ np.diag(s_inv) @ U.T
-                step = H_inv @ grad
-
-            # Check for invalid step
-            if not np.all(np.isfinite(step)):
                 break
 
-            # convergence check
+            alpha_p += step
+
             if np.linalg.norm(step) < tol:
                 break
-            gamma = gamma + step
-        return gamma
+
+        alpha[idx] = alpha_p
+        return alpha
 
 
 def get_data(
     data: pl.DataFrame, response: str | List[str], predictors: List[str]
 ) -> Tuple[np.ndarray, np.ndarray]:
     if len(predictors) > 0:
-        if FIT_INTERCEPT:
+        if get_env_fit_intercept():
             assert predictors[-1] == constant_colname, (
                 "Constant column is not last predictor"
             )
@@ -367,8 +346,8 @@ class CategoricalComputationUnit(ComputationUnit):
             if c.startswith(f"{response}{categorical_separator}")
         ]
         response_dummy_columns = sorted(response_dummy_columns)
-
         y_full, X = get_data(data, response_dummy_columns, predictors)
+
         y = y_full[:, 1:]
 
         if X is not None:
@@ -378,20 +357,20 @@ class CategoricalComputationUnit(ComputationUnit):
             # Reshape beta (K x (J-1))
             beta = beta.reshape(num_features, -1, order="F")
 
-        if CLIENT_HETEROGENIETY:
+        if get_env_client_heterogeniety()==1:
             if X is None:
                 offset = np.zeros_like(y)
             else:
                 offset = X @ beta
-            gamma = ComputationHelper.fit_multinomial_gamma(y=y, offset=offset)
-            gamma = np.tile(np.array(gamma), (y.shape[0], 1))
+            alpha = ComputationHelper.fit_multinomial_alpha(y, X @ beta)
+            alpha = np.tile(np.array(alpha), (y.shape[0], 1))
         else:
-            gamma = np.zeros_like(y)
+            alpha = np.zeros_like(y)
 
         if X is None:
             eta = np.zeros_like(y)
             mu = np.clip(
-                softmax(np.column_stack([np.zeros(y.shape[0]), eta + gamma]), axis=1),
+                softmax(np.column_stack([np.zeros(y.shape[0]), eta + alpha]), axis=1),
                 1e-8,
                 1 - 1e-8,
             )  # N x J
@@ -409,9 +388,9 @@ class CategoricalComputationUnit(ComputationUnit):
             return {"llf": llf, "xwx": xwx, "xwz": xwz, "rss": 0, "n": 0}
 
         # Compute eta and mu
-        eta = np.clip(X @ beta, -350, 350)  # N x (J-1)
+        eta = X @ beta  # N x (J-1)
         mu = np.clip(
-            softmax(np.column_stack([np.zeros(y.shape[0]), eta + gamma]), axis=1),
+            softmax(np.column_stack([np.zeros(y.shape[0]), eta + alpha]), axis=1),
             1e-8,
             1 - 1e-8,
         )  # N x J
@@ -436,8 +415,7 @@ class CategoricalComputationUnit(ComputationUnit):
             except np.linalg.LinAlgError:
                 var_i_inv = np.linalg.pinv(var_i)
 
-            # z_i = (eta[i] - gamma[i]) + var_i_inv @ (y_i - p_i)  # (J-1)
-            # because gamma is only added to mu and not to eta, gamma does not need to be subtracted from eta here
+            # because alpha is only added to mu and not to eta, alpha does not need to be subtracted from eta here
             z_i = (eta[i]) + var_i_inv @ (y_i - p_i)  # (J-1)
 
             # Compute local contributions to XWX and XWz
@@ -446,15 +424,14 @@ class CategoricalComputationUnit(ComputationUnit):
             XWX += Xi.T @ Wi @ Xi
             XWz += Xi.T @ Wi @ z_i
 
-        # Compute log-likelihood
-        logprob = np.log(np.clip(mu, 1e-8, 1))
+        logprob = np.log(np.clip(mu, 1e-8, 1-1e-8))
         llf = np.sum(y_full * logprob)
 
         # only use non-dummy values in rss and n for gaussian regression
         return {"llf": llf, "xwx": XWX, "xwz": XWz.reshape(-1, 1), "rss": 0, "n": 0}
 
 
-class OrdinalComputationUnit(ComputationUnit):
+class OrdinalComputationUnit:  # (ComputationUnit):
     @staticmethod
     def fix_sign(mus_diff):
         # fix negative probs
@@ -469,7 +446,7 @@ class OrdinalComputationUnit(ComputationUnit):
         mus_diff = [np.clip(p, 1e-8, None) for p in mus_diff]
         return mus_diff
 
-    @staticmethod
+    # @staticmethod
     def compute(
         data: pl.DataFrame,
         response: str,
@@ -503,7 +480,7 @@ class OrdinalComputationUnit(ComputationUnit):
                 level_int = int(level.split(ordinal_separator)[-1])
                 level_y = (y.squeeze() <= level_int).astype(float)
 
-                level_eta, level_mu, level_gamma = ComputationHelper.run_prediction(
+                level_eta, level_mu, level_alpha = ComputationHelper.run_prediction(
                     y=level_y, X=X, beta=beta_i, family=Binomial
                 )
                 mus.append(level_mu)
@@ -512,7 +489,7 @@ class OrdinalComputationUnit(ComputationUnit):
                     X=X,
                     eta=level_eta,
                     mu=level_mu,
-                    gamma=level_gamma,
+                    alpha=level_alpha,
                     family=Binomial,
                 )
 
@@ -576,6 +553,10 @@ class Client:
         self._network_fetch_function = _network_fetch_function
         self.id = id
         self.data: pl.DataFrame = data
+
+        if get_env_client_heterogeniety()==2:
+            self.data = self.data.with_columns(pl.lit(str(self.id)).alias(client_colname))
+
         self.schema: Dict[str, VariableType] = {
             column: polars_dtype_map[dtype]
             for column, dtype in dict(self.data.schema).items()
@@ -612,8 +593,6 @@ class Client:
         self.expanded_data: Optional[pl.DataFrame] = None
 
         self.contributing_clients: Dict[str, Client] = {}
-        # self.received_masks = {}
-        # self.send_masks = {}
         self.response_masking = {}
 
     def get_id(self):
@@ -690,6 +669,7 @@ class Client:
         )
 
         self.expanded_data = _data
+        self.local_effect_store_ordinal = {}
 
     def exchange_masks(self, betas):
         betas = self._network_fetch_function(betas)
@@ -752,51 +732,8 @@ class Client:
             "n": n_mask,
         }
 
-    # def combine_masks(self, betas):
-    #     betas = self._network_fetch_function(betas)
-    #     if len(self.contributing_clients) == 0:
-    #         return
-    #     for test_key in betas:
-    #         assert test_key in self.received_masks, (
-    #             "Client did not receive required mask"
-    #         )
-    #         assert test_key in self.send_masks, "Client did not send required mask"
-    #         assert len(self.received_masks[test_key]) == len(
-    #             self.send_masks[test_key]
-    #         ), "Number of send and received masks does not match"
-
-    #         if test_key not in self.response_masking:
-    #             self.response_masking[test_key] = {}
-
-    #         llf_masks = []
-    #         xwx_masks = []
-    #         xwz_masks = []
-    #         rss_masks = []
-    #         n_masks = []
-    #         for sender_id, masks1 in self.received_masks[test_key].items():
-    #             assert sender_id in self.send_masks[test_key], (
-    #                 "Received a mask from a client no mask has been sent to"
-    #             )
-
-    #             masks2 = self.send_masks[test_key][sender_id]
-    #             llf_masks.append(masks1["llf"] - masks2["llf"])
-    #             xwx_masks.append(masks1["xwx"] - masks2["xwx"])
-    #             xwz_masks.append(masks1["xwz"] - masks2["xwz"])
-    #             rss_masks.append(masks1["rss"] - masks2["rss"])
-    #             n_masks.append(masks1["n"] - masks2["n"])
-
-    #         self.response_masking[test_key] = {
-    #             "llf": sum(llf_masks),
-    #             "xwx": sum(xwx_masks),
-    #             "xwz": sum(xwz_masks),
-    #             "rss": sum(rss_masks),
-    #             "n": sum(n_masks),
-    #         }
-    #         del self.received_masks[test_key]
-    #         del self.send_masks[test_key]
-
     def apply_masks(self, test_key, irls_step_result):
-        if not ADDITIVE_MASKING:
+        if not get_env_additive_masking():
             return irls_step_result
         assert (
             len(self.response_masking[test_key])
@@ -816,16 +753,12 @@ class Client:
 
     def compute(
         self,
+        required_variables: Set[str],
         betas: Dict[Tuple[str, Tuple[str], int], np.ndarray],
     ):
         betas = self._network_fetch_function(betas)
 
-        test_vars = [
-            {resp_var} | set(cond_vars) for resp_var, cond_vars, _ in betas.keys()
-        ]
-        test_vars = set.union(*test_vars)
-
-        if any([v not in self.schema for v in test_vars]):
+        if any([v not in self.schema for v in required_variables]):
             result = {}
             for test_key, beta in betas.items():
                 result[test_key] = self.apply_masks(
@@ -855,17 +788,19 @@ class Client:
                 else:
                     new_cond_vars.append(cond_var)
             new_cond_vars = sorted(new_cond_vars)
-            if FIT_INTERCEPT:
+            if get_env_fit_intercept():
                 new_cond_vars.append(constant_colname)
             cond_vars = new_cond_vars
             result = regression_computation_map[self.schema[resp_var]].compute(
-                self.expanded_data, resp_var, cond_vars, beta
+                self.expanded_data,
+                resp_var,
+                cond_vars,
+                beta
             )
             if len(self.contributing_clients) > 0:
                 result = self.apply_masks(test_key, result)
 
             results[test_key] = BetaUpdateData(**result)
-        # TODO: maybe just exchange difference of LLF of full and nested models
         return results
 
 
@@ -874,7 +809,6 @@ class ProxyClient(rpyc.Service):
         self.client = Client(id, data, _network_fetch_function=rpyc.classic.obtain)
         self.server: rpyc.utils.server.ThreadedServer = None
 
-        # expose alle Methoden sofort:
         for name in dir(self.client):
             if callable(getattr(self.client, name)) and not name.startswith("_"):
                 setattr(self, name, getattr(self.client, name))

@@ -10,9 +10,9 @@ from fedci.utils import (
 )
 
 from .client import Client
-from .env import ADDITIVE_MASKING, DEBUG, FIT_INTERCEPT
+from .env import get_env_additive_masking, get_env_debug, get_env_fit_intercept, get_env_client_heterogeniety
 from .testing import TestEngine
-from .utils import BetaUpdateData
+from .utils import BetaUpdateData, client_colname
 
 
 class Server:
@@ -21,7 +21,7 @@ class Server:
         clients: List[Client],
         schema: Optional[InitialSchema] = None,
         max_regressors: Optional[int] = None,
-        convergence_threshold: Optional[float] = 1e-6,
+        convergence_threshold: Optional[float] = 1e-5,
         max_iterations: Optional[int] = 25,
         _network_fetch_function=lambda x: x,
     ):
@@ -114,21 +114,27 @@ class Server:
         )
 
     def test(self, x: str, y: str, s: List[str]):
+        if get_env_client_heterogeniety()==2 and client_colname in [x,y]:
+            return None
         if x > y:
             x, y = y, x
+
+        if get_env_client_heterogeniety()==2:
+            s.append(client_colname)
+            s = sorted(s)
+
         self.test_engine.start_test(x, y, s)
 
         while not self.test_engine.is_finished():
             betas = self.test_engine.get_test_parameters()
+            required_vars = self.test_engine.get_required_variables()
             clients = self.clients.values()
-            if ADDITIVE_MASKING:
+            if get_env_additive_masking():
                 for client in clients:
                     client.exchange_masks(betas)
-                # for client in clients:
-                #    client.combine_masks(betas)
             updates = []
             for client in clients:
-                update = client.compute(betas)
+                update = client.compute(required_vars, betas)
                 update = self._network_fetch_function(update)
                 update = {
                     k: BetaUpdateData(**v) if type(v) is dict else v
@@ -137,18 +143,20 @@ class Server:
                 updates.append(update)
 
             self.test_engine.update_parameters(updates)
-        if DEBUG > 0:
+        if get_env_debug() > 0:
             print("*** Final betas")
             for key, beta in self.test_engine.test.get_betas().items():
                 cond_set = sorted(list(key[1]))
-                if FIT_INTERCEPT:
+                if get_env_fit_intercept():
                     cond_set.append("1")
 
                 print(f"{key[0]} ~ {','.join(cond_set)} after {key[2]} iterations")
                 for _beta in beta.tolist():
                     print(_beta)
         result = self.test_engine.get_result()
-        if result.iterations == 1:
+        if result.get_iterations() <= 0:
+            #print('FILTERING OUT:')
+            #print(result, result.get_iterations())
             return None
         return result
 
@@ -162,6 +170,8 @@ class Server:
             if max_cond_size is None:
                 max_cond_size = len(variables) - 2
 
+            if get_env_client_heterogeniety()==2:
+                variables = variables - {client_colname}
             for y_var in variables:
                 variables_without_y = variables - {y_var}
                 for x_var in variables_without_y:
@@ -187,7 +197,7 @@ class Server:
                 continue
 
             finished_tests.append(test_result)
-        if DEBUG >= 1:
+        if get_env_debug() >= 1:
             print("*** All tests")
             for test in finished_tests:
                 print(test)
