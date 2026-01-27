@@ -38,6 +38,7 @@ class RegressionTest:
         self.llf: float = -float("inf")
         self.iterations: int = 0
         self.convergence_retry_count = 0
+        self.reinit_beta = False
         self.lm_lambda = 1
 
     def __repr__(self):
@@ -117,15 +118,22 @@ class RegressionTest:
         return self.beta + self.alpha * ((xwx_inv @ xwz) - self.beta)
 
     def update_parameters(self, update: List[BetaUpdateData]):
+        if get_env_debug() >= 2:
+            print(f"Updating {self.response} ~ {self.predictors} - {self.iterations}")
         if self.is_finished():
             return
 
         llf = sum([_update.llf for _update in update])
         xwx = sum([_update.xwx for _update in update])
         xwz = sum([_update.xwz for _update in update])
-        n = int(sum([_update.n for _update in update]))
+        n = int(np.sum([_update.n for _update in update]).item())
 
-        if np.allclose(xwz, np.zeros_like(xwz)):
+        if abs(llf) < 1e-8 and np.allclose(xwx, np.zeros_like(xwx)) and np.allclose(xwz, np.zeros_like(xwz)):
+            self.early_stop = True
+            return
+
+        if not self.reinit_beta and np.allclose(xwz, np.zeros_like(xwz)):
+            self.reinit_beta = True
             # readjust beta -> mostly an issue with small datasets and perfectly even distribution of categories
             self.beta = np.random.randn(self.dof, 1)
             return
@@ -183,7 +191,6 @@ class RegressionTest:
             and np.linalg.norm(self.beta - beta) < 1e-4
             or np.linalg.norm(self.beta - beta) < 1e-8
         ):
-            print(xwz)
             self.early_stop = True
             return
         self.beta = beta
