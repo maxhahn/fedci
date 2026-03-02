@@ -5,18 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "python-fedci"
 authors = [{ name = "Maximilian Hahn", email = "max.hahn@gmx.de" }]
-version = "0.1.0"
+version = "0.1.1"
 license = { file = "LICENSE" }
 description = "A small package for federated independence tests"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "build>=1.4.0",
     "polars>=1.22.0",
     "pyarrow>=19.0.0",
     "pytest>=8.3.5",
     "rpyc>=6.0.1",
     "scipy>=1.15.1",
     "statsmodels>=0.14.4",
+    "twine>=6.2.0",
 ]
 
 [project.optional-dependencies]
