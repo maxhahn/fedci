@@ -125,9 +125,14 @@ class RegressionTest:
         xwz = sum([_update.xwz for _update in update])
         n = int(sum([_update.n for _update in update]))
 
-        if np.allclose(xwz, np.zeros_like(xwz)):
+        if abs(llf) < 1e-10:
+            self.early_stop = True
+            return
+
+        if self.iterations == 0 and np.allclose(xwz, np.zeros_like(xwz)):
             # readjust beta -> mostly an issue with small datasets and perfectly even distribution of categories
             self.beta = np.random.randn(self.dof, 1)
+            self.iterations += 1
             return
 
         if self.response_type == VariableType.CONTINUOS and n > 0:
@@ -179,11 +184,11 @@ class RegressionTest:
             self.lm_lambda /= 10
         beta = self._get_new_beta(xwx, xwz)
         if (
-            self.iterations == 0
-            and np.linalg.norm(self.beta - beta) < 1e-4
-            or np.linalg.norm(self.beta - beta) < 1e-8
+            #self.iterations == 0
+            #and np.linalg.norm(self.beta - beta) < 1e-4
+            #or np.linalg.norm(self.beta - beta) < 1e-8
+            np.linalg.norm(self.beta - beta) < 1e-8
         ):
-            print(xwz)
             self.early_stop = True
             return
         self.beta = beta

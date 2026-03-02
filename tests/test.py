@@ -113,11 +113,14 @@ def test_local_server_single_client(sample_data):
 def test_local_server_single_client_partial_data(sample_data):
     subdata = sample_data.head(10)
     server = Server([Client("1", subdata)])
-
+    
     results = server.run()
+
+    
 
     # expected tests is (n over 2) x (n-2)^2, pick two variables X and Y and all others can either be in conditioning set or not
     num_cols = len(sample_data.columns)
+    
     assert len(results) == scipy.special.binom(num_cols, 2) * (num_cols - 2) ** 2
 
 
@@ -149,9 +152,6 @@ def test_local_server_multiple_clients_cond_size_0(sample_data):
 
     server = Server([Client("1", df1), Client("2", df2)])
     results = server.run(max_cond_size=0)
-
-    for r in sorted(results):
-        print(r)
 
     num_cols = len(sample_data.columns)
     assert len(results) == (
